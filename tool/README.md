@@ -115,6 +115,7 @@ Vivado 用真实 FPGA 延迟数据库（硅实测），OpenSTA 用 ASIC .lib 估
 | `run_nscscc_func.bat [-v] [-w] [-d]` | NSCSCC 功能测试（58 点） | 58 |
 | `run_perf.bat <bench> [-v] [-w] [-d] [-s hex]` | 性能测试（20 个 benchmark + allbench 可选） | 1 |
 | `run_cpu_diag.bat [-v] [-w] [-d]` | CPU 诊断测试 | 1 |
+| `run_random.bat [case名]` | 随机指令序列验证（difftest + NEMU 比对） | 每 case 30 万条 |
 
 ## perf 可用 benchmark
 
@@ -132,9 +133,19 @@ allbench    ← 全部集成，用 -s 拨码开关选择
 | 参数 | 作用 |
 |------|------|
 | `-v` | 逐周期打印 PC、指令、寄存器值 |
-| `-w` | 生成 fst 波形到 `tool/simu_trace.fst` |
+| `-w` | 传统波形：fst 到 `tool/simu_trace.fst`（全部周期记录，慢） |
 | `-d` | 启用 difftest |
+| `-l` | lightSSS fork 波形：`tool/fork_simu_trace.fst`（隐式开启 difftest） |
 | `-s <hex>` | 仿真拨码开关输入值（仅 `allbench` 需要） |
+
+### lightSSS（-l）说明
+
+需要 Verilator ≥5.016（本环境已升级）。原理：父进程每 `FORK_INTERVAL` 毫秒 fork 一个 checkpoint 子进程，测试**非正常结束**（difftest 报错/卡死超时）时唤醒最老 checkpoint 子进程 dump 波形——**波形只为调试存在**：
+
+- **测试通过 → 不生成波形**（省掉全部波形开销，性能大幅提升）
+- **测试失败/卡死 → 自动保留最近 checkpoint 波形** `fork_simu_trace.fst`（gtkwave 打开）
+
+注意：`-l` 依赖 TRACE_COMP（difftest 编译），bat 会自动开启；单独传 `-l` 即可，也可 `-l -w` 同时保留两种（正常通过时 -w 仍有波形，-l 覆盖失败场景）。
 
 ### allbench 拨码开关映射
 
@@ -153,6 +164,25 @@ allbench    ← 全部集成，用 -s 拨码开关选择
 
 > 默认 `0xff` → 低 5 位为 `0x1f` → 直接结束（等价于不选任何 benchmark）。
 > 单个 benchmark 不用 `-s`，直接 `run_perf.bat coremark` 即可。
+
+### random 测试（run_random.bat）
+
+随机指令序列验证，每 case 30 万条指令，用 NEMU 做金标准比对（difftest）。
+
+**前提**：先下载 `random_res_*.tar.bz2`（网盘提取码 sHJS），解压后把 `RES_cluster_*` / `RES_jump_*` 文件夹放入 `software/examples/random_res/`（目录自己建，只放 RES 文件夹）。
+
+```bat
+run_random.bat          ← 编译 + 跑全部 case
+run_random.bat RES_xxx  ← 单跑指定 case
+```
+
+结果：
+- 全部：`sims/verilator/run_random/log/` 下 PASS/FAIL 汇总
+- 单 case：`log\case名\run.log`（运行日志）、`simu_trace.fst`（波形，gtkwave 打开）
+
+配置：`sims/verilator/run_random/config-random.mak`（TRACE_COMP=y 必须保持——随机测试靠 NEMU 比对；CACHE_SEED 随机 cached/uncached MAT；DUMP_VCD=y 可改 n 提速）。
+
+**注意**：run_random 的 make 不自动加交叉工具链 PATH，bat 内已处理。若手动在 WSL 跑需先 export。
 
 ## 终止条件
 

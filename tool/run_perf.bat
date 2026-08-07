@@ -9,26 +9,40 @@ set WSL_PERF=/home/dorcus_t/chiplab/software/examples/nscscc_perf_verilator
 set WSL_CHIPLAB=/home/dorcus_t/chiplab
 set PC_TRACE=
 set DUMP_WAVE=
+set LIGHTSSS=
 set DIFFTEST=--disable-trace-comp
 set SWITCH=
 
 :parse_args
 if "%2"=="-v" set PC_TRACE=--show-pc-info
 if "%2"=="-w" set DUMP_WAVE=--dump-waveform 1
+if "%2"=="-l" (
+    set LIGHTSSS=--fork-child 1
+    set DIFFTEST=
+)
 if "%2"=="-d" set DIFFTEST=
 if "%2"=="-s" set SWITCH=--switch %3
 if "%3"=="-v" set PC_TRACE=--show-pc-info
 if "%3"=="-w" set DUMP_WAVE=--dump-waveform 1
+if "%3"=="-l" (
+    set LIGHTSSS=--fork-child 1
+    set DIFFTEST=
+)
 if "%3"=="-d" set DIFFTEST=
 if "%3"=="-s" set SWITCH=--switch %4
 if "%4"=="-v" set PC_TRACE=--show-pc-info
 if "%4"=="-w" set DUMP_WAVE=--dump-waveform 1
+if "%4"=="-l" (
+    set LIGHTSSS=--fork-child 1
+    set DIFFTEST=
+)
 if "%4"=="-d" set DIFFTEST=
 
 echo ===============================================================
 echo   nscscc_perf/%BENCH% Verilator Simulation
 if "%PC_TRACE%"=="--show-pc-info" echo   (verbose: per-cycle PC)
 if "%DUMP_WAVE%"=="--dump-waveform 1" echo   (waveform: fst)
+if "%LIGHTSSS%"=="--fork-child 1" echo   (lightSSS waveform: fork_simu_trace.fst)
 if "%DIFFTEST%"=="" echo   (difftest: enabled)
 if not "%SWITCH%"=="" echo   (switch: %SWITCH%)
 echo ===============================================================
@@ -53,11 +67,12 @@ echo    Compile OK.
 echo.
 
 echo [4/4] Running simulation...
-wsl -d Ubuntu-22.04 -e bash -c "export CHIPLAB_HOME=%WSL_CHIPLAB%; RUN_DIR=%WSL_CHIPLAB%/sims/verilator/run_prog; rm -rf $RUN_DIR/obj/perf_%BENCH%_obj; mkdir -p $RUN_DIR/obj/perf_%BENCH%_obj; cp -r %WSL_PERF%/obj/%BENCH% $RUN_DIR/obj/perf_%BENCH%_obj/obj; rm -rf $RUN_DIR/tmp; mkdir -p $RUN_DIR/tmp; cp %WSL_PERF%/obj/%BENCH%/rom.vlog $RUN_DIR/tmp/; cat $RUN_DIR/tmp/rom.vlog > $RUN_DIR/tmp/ram.dat; cd $RUN_DIR/tmp; ln -sf ../Makefile_run .; timeout 1800 ../output --dump-delay 0 %DUMP_WAVE% --time-limit 0 %PC_TRACE% %SWITCH%; if [ -f logs/simu_trace.fst ]; then cp logs/simu_trace.fst %WSL_CHIPLAB%/IP/myCPU/tool/; fi"
+wsl -d Ubuntu-22.04 -e bash -c "export CHIPLAB_HOME=%WSL_CHIPLAB%; RUN_DIR=%WSL_CHIPLAB%/sims/verilator/run_prog; rm -rf $RUN_DIR/obj/perf_%BENCH%_obj; mkdir -p $RUN_DIR/obj/perf_%BENCH%_obj; cp -r %WSL_PERF%/obj/%BENCH% $RUN_DIR/obj/perf_%BENCH%_obj/obj; rm -rf $RUN_DIR/tmp; mkdir -p $RUN_DIR/tmp; cp %WSL_PERF%/obj/%BENCH%/rom.vlog $RUN_DIR/tmp/; cat $RUN_DIR/tmp/rom.vlog > $RUN_DIR/tmp/ram.dat; cd $RUN_DIR/tmp; ln -sf ../Makefile_run .; timeout 1800 ../output --dump-delay 0 %DUMP_WAVE% --time-limit 0 %PC_TRACE% %SWITCH% %LIGHTSSS%; if [ -f logs/simu_trace.fst ]; then cp logs/simu_trace.fst %WSL_CHIPLAB%/IP/myCPU/tool/; fi; if [ -f logs/fork_simu_trace.fst ]; then cp logs/fork_simu_trace.fst %WSL_CHIPLAB%/IP/myCPU/tool/; fi"
 echo.
 echo ===============================================================
 echo   Simulation finished.
 if "%DUMP_WAVE%"=="--dump-waveform 1" echo   Waveform: tool\simu_trace.fst
+if "%LIGHTSSS%"=="--fork-child 1" echo   LightSSS waveform: tool\fork_simu_trace.fst (gtkwave)
 echo ===============================================================
 pause
 goto :eof
