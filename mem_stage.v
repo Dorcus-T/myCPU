@@ -128,6 +128,13 @@ module mem_stage (
     // 访存指令
     wire        is_mem_inst;              // 是访存指令
     wire        mem_we;                   // 存储器写使能
+    // LL/SC 透传字段（写回 mux 用）
+    wire        ll_w;                     // LL.W 指令（透传到 WB 置 LLbit）
+    wire        sc_w;                     // SC.W 指令（rd 写回值合成）
+    // IDLE 透传字段（WB 提交后停取指）
+    wire        idle;                     // IDLE 指令
+    // PRELD 透传字段（不等数据，fifo 透明）
+    wire        preld;                    // PRELD 指令
 
     `ifdef DIFFTEST_EN
     // difftest 信号
@@ -148,8 +155,12 @@ module mem_stage (
 
     // ========== 解析来自PRE_MEM阶段的总线 ==========
     assign {
+        preld,               // 488     PRELD 指令（MSB 端新增，不移动原有字段）
+        idle,                // 487     IDLE 指令
+        ll_w,                // 486     LL.W 指令
+        sc_w,                // 485     SC.W 指令
         `ifdef DIFFTEST_EN
-        dift_csr_data,       // 452:421 csr读数据 for difftest
+        dift_csr_data,       // 484:453 csr读数据 for difftest
         dift_csr_rstat_en,   // 420     csr estat读使能 for difftest
         dift_inst_st_en,     // 419:412 store使能 for difftest
         dift_inst_ld_en,     // 411:404 load使能 for difftest
@@ -202,6 +213,8 @@ module mem_stage (
 
     // ========== 输出到WB阶段的总线 ==========
     assign mem_to_wb_bus = {
+        idle,                // 482     IDLE 指令（MSB 端新增，不移动原有字段）
+        ll_w,                // 481     LL.W 指令
         res_from_mem,        // 480     结果来自存储器（load 数据扩展使能）
         mem_sign_ext,        // 479     符号扩展标志
         mem_size,            // 478:476 访存大小
@@ -243,18 +256,22 @@ module mem_stage (
 
     // ========== 流水线控制 ==========
     // load 数据直通 WB 总线，data_ok 即完成（无需锁存处理拍）
-    assign work_done       = is_mem_inst && !mem_we && !mem_exc_valid ? dcache_cpu_data_ok : 1'b1;
+    // preld：不等数据（uncached 被取消时无 data_ok，直接完成）
+    assign work_done       = is_mem_inst && !mem_we && !mem_exc_valid ? (preld ? 1'b1 : dcache_cpu_data_ok) : 1'b1;
     assign mem_ready_go    = work_done || !mem_valid || lready;
     assign mem_to_wb_valid = mem_valid;
 
     // ========== DCache 数据接受 ==========
-    assign dcache_cpu_accept = mem_valid && lpower && is_mem_inst && !mem_we;
+    // preld：不弹 fifo（配合 dcache 的 fifo_we 门控，读数据 fifo 完全透明）
+    assign dcache_cpu_accept = mem_valid && lpower && is_mem_inst && !mem_we && !preld;
 
     // ========== csr写文件写回控制 ==========
     assign mem_csr_we = csr_we && mem_valid;
 
     // 最终结果：来自ALU/CSR/计数器（load 数据由 WB 级从总线 mem_rdata 扩展）
-    assign final_result = res_from_mem   ? alu_result    :
+    // sc_w：rd 写回 = {31'b0, llbit 采样}（在 MEM 合成，保证 mem_to_id_result 前递正确）
+    assign final_result = sc_w           ? {31'b0, csr_rvalue[0]} :
+                          res_from_mem   ? alu_result    :
                           res_from_csr   ? csr_rvalue    :
                           res_from_timer ? timer_finalval :
                           alu_result;

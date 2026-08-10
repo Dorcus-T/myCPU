@@ -21,6 +21,8 @@ module wb_stage (
     // csr与ertn冒险
     output wire                         wb_csr_we,             // wb阶段确定写csr
     output wire [13:0]                  wb_csr_num,            // wb阶段写csr的寄存器号
+    output wire                         wb_ll_w,               // LL.W 提交 → 置 LLbit（供 csr 模块）
+    output wire                         wb_idle,               // IDLE 提交 → 停取指（供 IF 置 if_idle）
     // 输出给csr寄存器堆（包含异常处理和写交互信号）
     output wire [`WB_TO_CSR_BUS_WD-1:0] wb_to_csr_bus,         // 写回级到csr寄存器的总线
     // 冲刷相关控制
@@ -144,6 +146,8 @@ module wb_stage (
     wire        csr_we;                    // 1位 最终csr寄存器写使能
     wire [31:0] csr_wmask;                 // 32位 csr寄存器写掩码
     wire [31:0] csr_wvalue;                // 32位 csr寄存器写数据
+    wire        ll_w;                      // LL.W 指令（提交点置 LLbit）
+    wire        idle;                      // IDLE 指令（提交点停取指）
 
     `ifdef DIFFTEST_EN
     // ========== difftest 信号 ==========
@@ -165,6 +169,8 @@ module wb_stage (
     // ========== 解析来自MEM阶段的总线 ==========
     // 从锁存的执行级总线中提取各个字段
     assign {
+        idle,                  // 482     IDLE 指令（MSB 端新增，不移动原有字段）
+        ll_w,                  // 481     LL.W 指令
         res_from_mem,          // 480     结果来自存储器（load 数据扩展使能）
         mem_sign_ext,          // 479     符号扩展标志
         mem_size,              // 478:476 访存大小
@@ -246,6 +252,16 @@ module wb_stage (
     // ========== csr写文件写回控制 ==========
     assign wb_csr_we = csr_we && can_req;  // 异常或者失效指令不能发出写使能
 
+    // ========== LL.W 提交信号 ==========
+    // LLbit 无法用 CSR 写置位（LLBCTL 无置位位），只能由 LL.W 提交点单独置
+    // SC.W 的 LLbit 清除由合成 CSR 写（mask/value=2/2）走 wb_csr_we 通路，无需 wb_sc_w
+    assign wb_ll_w = ll_w && can_req;      // 异常/冲刷时不生效
+
+    // ========== IDLE 提交信号 ==========
+    // IDLE 在 ID 级通过 rf_ctrl 给 IDLE+4 打重取指标记（各级 exc_o 冲刷 + 到 WB 重取指），
+    // 这里在提交点置 if_idle（IF 停取指，等待中断唤醒）
+    assign wb_idle = idle && can_req;      // 异常/冲刷时不生效
+
     // ========== 调试信息输出 ==========
     assign debug_wb_pc       = wb_pc;                        // 当前写回的PC值
     assign debug_wb_rf_we    = {4{rf_we}};                   // 扩展为4位（用于调试显示）
@@ -301,7 +317,7 @@ module wb_stage (
 
     `ifdef DIFFTEST_EN
     // INT 不提交（只走 ExcpEvent→raise_intr），其余均提交
-    wire real_valid = wb_valid && (!wb_exc_valid || syscall || brk);
+    wire real_valid = wb_valid && (!wb_exc_valid || (syscall || brk) && !rf_valid);
     assign ws_valid_diff        = real_valid        ;
     assign ws_timer_64_diff     = dift_timer_64     ;
     assign ws_cnt_inst_diff     = dift_cnt_inst     ;

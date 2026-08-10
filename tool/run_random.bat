@@ -58,7 +58,7 @@ if "%LIGHTSSS%"=="1" echo   (lightSSS waveform: fork_simu_trace)
 echo ===============================================================
 echo.
 echo [1/3] Preparing test case...
-wsl -d Ubuntu-22.04 -e bash -c "export PATH=%WSL_TOOL%:$PATH && export CHIPLAB_HOME=%WSL_CHIPLAB% && cd %WSL_RANDOM%/run_random && if [ ! -d %CASE% ]; then make prepare -f ./Makefile; fi && cd %CASE% && make simulation_run_random -f ../../Makefile_run CASENAME=%CASE% DUMP_WAVEFORM=%DUMP_WAVE% FORK_CHILD=%LIGHTSSS%"
+wsl -d Ubuntu-22.04 -e bash -c "export PATH=%WSL_TOOL%:$PATH && export CHIPLAB_HOME=%WSL_CHIPLAB% && cd %WSL_RANDOM% && if [ ! -f obj_dir/Vsimu_top.mk ] || find %WSL_CHIPLAB%/IP/myCPU -name '*.v' -newer obj_dir/Vsimu_top.mk 2>/dev/null | grep -q .; then echo '  CPU 源码已修改，重新编译模型...' && make link verilator testbench || exit 1; else echo '  模型已最新'; fi && make all -C ../../../software/examples/random_boot/ ./Makefile >/dev/null 2>&1 && cd run_random && if [ ! -d %CASE% ]; then make prepare -f ./Makefile; fi && cd %CASE% && make simulation_run_random -f ../../Makefile_run CASENAME=%CASE% DUMP_WAVEFORM=%DUMP_WAVE% FORK_CHILD=%LIGHTSSS%"
 if errorlevel 1 (
     echo ERROR: Test failed!
     pause
@@ -69,7 +69,7 @@ echo ===============================================================
 echo   Test finished.
 echo   Log: %CHIPLAB_HOME%\sims\verilator\run_random\log\%CASE%\run.log
 if "%DUMP_WAVE%"=="1" echo   Waveform: %CHIPLAB_HOME%\sims\verilator\run_random\log\%CASE%\simu_trace.vcd (gtkwave)
-if "%LIGHTSSS%"=="1" echo   LightSSS waveform: %CHIPLAB_HOME%\sims\verilator\run_random\log\%CASE%\fork_simu_trace.vcd
+if "%LIGHTSSS%"=="1" echo   LightSSS waveform: %CHIPLAB_HOME%\sims\verilator\run_random\log\%CASE%\fork_simu_trace.fst
 echo ===============================================================
 pause
 goto :eof

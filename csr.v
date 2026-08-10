@@ -11,6 +11,7 @@ module csr_regfile (
     output wire [31:0]                  csr_rvalue,    // 读出数据，送给ID阶段
     output wire                         has_int,       // 有待处理的中断
     // 与 WB 阶段交互
+    input  wire                         wb_ll_w,       // LL.W 提交 → 置 LLbit
     input  wire [`WB_TO_CSR_BUS_WD-1:0] wb_to_csr_bus,
     // 来自顶层
     input  wire [31:0]                  coreid_in,
@@ -181,7 +182,6 @@ module csr_regfile (
     reg  [31:0] csr_asid;
     reg  [31:0] csr_pgdl;
     reg  [31:0] csr_pgdh;
-    reg  [31:0] csr_pgd;
     reg  [31:0] csr_cpuid;
     reg  [31:0] csr_save0;
     reg  [31:0] csr_save1;
@@ -216,7 +216,7 @@ module csr_regfile (
     assign csr_asid_rvalue    = {8'b0, csr_asid[23:16], 6'b0, csr_asid[9:0]};
     assign csr_pgdl_rvalue    = {csr_pgdl[31:12], 12'b0};
     assign csr_pgdh_rvalue    = {csr_pgdh[31:12], 12'b0};
-    assign csr_pgd_rvalue     = {csr_pgd[31:12], 12'b0};
+    assign csr_pgd_rvalue     = csr_badv[31] ? csr_pgdh_rvalue : csr_pgdl_rvalue;  // BADV[31] 选高/低半
     assign csr_cpuid_rvalue   = {23'b0, csr_cpuid[8:0]};
     assign csr_save0_rvalue   = csr_save0;
     assign csr_save1_rvalue   = csr_save1;
@@ -349,7 +349,7 @@ module csr_regfile (
             csr_prmd[`CSR_PRMD_PIE]  <= csr_crmd[`CSR_CRMD_IE];
         end
         else if (csr_we && csr_num == `CSR_PRMD) begin
-            csr_prmd <= (csr_wmask & csr_wvalue & 32'h3)
+            csr_prmd <= (csr_wmask & csr_wvalue & 32'h7)
                       | (~csr_wmask & csr_prmd);
         end
     end
@@ -359,7 +359,7 @@ module csr_regfile (
     // ============================================================
     always @(posedge clk) begin
         if (reset) begin
-            csr_euen[`CSR_EUEN_FPE] <= 1'b1;
+            csr_euen[`CSR_EUEN_FPE] <= 1'b0;   // 无浮点单元，FPE 复位 0
         end
     end
 
@@ -503,11 +503,30 @@ module csr_regfile (
     end
 
     // ============================================================
-    // LLBCTL 写操作（占位）
+    // LLBCTL 写操作（LLbit / KLO）
+    // 优先级：复位 > ERTN > LL.W 置位 > CSR 写（单发射互斥）
+    // - ERTN 清位是条件清（KLO=0 才清），KLO 总是自动清 0
+    // - LL.W 提交（wb_ll_w）置 LLbit，无法用 CSR 写置位
+    // - CSR 写清 LLbit：软件 WCLLB 与 SC.W 合成写（mask/value=2/2）共用
+    // - LL.W 的合成写（mask/value=0/0）在此分支无操作
     // ============================================================
     always @(posedge clk) begin
         if (reset) begin
-            csr_llbctl[`CSR_LLBCTL_KLO] <= 1'b0;
+            csr_llbctl[`CSR_LLBCTL_KLO]   <= 1'b0;
+            csr_llbctl[`CSR_LLBTCL_ROLLB] <= 1'b0;   // LLbit 复位 0
+        end
+        else if (wb_ertn_flush) begin
+            if (!csr_llbctl[`CSR_LLBCTL_KLO])
+                csr_llbctl[`CSR_LLBTCL_ROLLB] <= 1'b0;   // KLO=0 → 条件清位
+            csr_llbctl[`CSR_LLBCTL_KLO] <= 1'b0;         // KLO 总是自动清 0
+        end
+        else if (wb_ll_w)
+            csr_llbctl[`CSR_LLBTCL_ROLLB] <= 1'b1;       // LL.W 置位（优先级高于空操作写）
+        else if (csr_we && csr_num == `CSR_LLBCTL) begin
+            if (csr_wmask[`CSR_LLBCTL_WCLLB] && csr_wvalue[`CSR_LLBCTL_WCLLB])
+                csr_llbctl[`CSR_LLBTCL_ROLLB] <= 1'b0;   // SC.W / WCLLB 清位
+            csr_llbctl[`CSR_LLBCTL_KLO] <= (csr_wmask[`CSR_LLBCTL_KLO] & csr_wvalue[`CSR_LLBCTL_KLO])
+                                         | (~csr_wmask[`CSR_LLBCTL_KLO] & csr_llbctl[`CSR_LLBCTL_KLO]);
         end
     end
 
@@ -590,6 +609,24 @@ module csr_regfile (
         else if (csr_we && csr_num == `CSR_ASID) begin
             csr_asid[`CSR_ASID_ASID] <= (csr_wmask[`CSR_ASID_ASID] & csr_wvalue[`CSR_ASID_ASID])
                                       | (~csr_wmask[`CSR_ASID_ASID] & csr_asid[`CSR_ASID_ASID]);
+        end
+    end
+
+    // ============================================================
+    // PGDL / PGDH 写操作（Base 域 RW，低 12 位只读恒 0，写被忽略）
+    // ============================================================
+    always @(posedge clk) begin
+        if (reset) begin
+            csr_pgdl[`CSR_PGDL_BASE] <= 20'b0;
+            csr_pgdh[`CSR_PGDH_BASE] <= 20'b0;
+        end
+        else if (csr_we && csr_num == `CSR_PGDL) begin
+            csr_pgdl[`CSR_PGDL_BASE] <= (csr_wmask[`CSR_PGDL_BASE] & csr_wvalue[`CSR_PGDL_BASE])
+                                      | (~csr_wmask[`CSR_PGDL_BASE] & csr_pgdl[`CSR_PGDL_BASE]);
+        end
+        else if (csr_we && csr_num == `CSR_PGDH) begin
+            csr_pgdh[`CSR_PGDH_BASE] <= (csr_wmask[`CSR_PGDH_BASE] & csr_wvalue[`CSR_PGDH_BASE])
+                                      | (~csr_wmask[`CSR_PGDH_BASE] & csr_pgdh[`CSR_PGDH_BASE]);
         end
     end
 

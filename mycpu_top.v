@@ -65,11 +65,13 @@ module core_top (
     output wire [31:0]  debug0_icache_access_cnt,  // ICache 查找次数（cached）
     output wire [31:0]  debug0_icache_miss_cnt,    // ICache miss 次数
     output wire [31:0]  debug0_icache_real_miss_cnt, // ICache 真实 miss 次数
+    output wire [31:0]  debug0_icache_relookup_cnt,  // ICache VIPT 别名重查次数
     output wire [31:0]  debug0_dcache_total_req,   // DCache 访存指令总数
     output wire [31:0]  debug0_dcache_access_cnt,  // DCache 查找次数（cached）
     output wire [31:0]  debug0_dcache_miss_cnt,    // DCache L1 miss（含 VC hit）
     output wire [31:0]  debug0_dcache_real_miss_cnt, // DCache 真实 miss 次数
-    output wire [31:0]  debug0_dcache_vc_hit_cnt   // DCache VC 命中次数
+    output wire [31:0]  debug0_dcache_vc_hit_cnt,  // DCache VC 命中次数
+    output wire [31:0]  debug0_dcache_relookup_cnt // DCache VIPT 别名重查次数
 );
 
     // ========== 复位信号处理（将低有效转换为高有效） ==========
@@ -189,6 +191,8 @@ module core_top (
     wire        mem_csr_we;         // mem阶段写csr使能
     wire [13:0] wb_csr_num;         // wb阶段写csr寄存器号
     wire        wb_csr_we;          // wb阶段写csr使能
+    wire        wb_ll_w;            // LL.W 提交 → 置 LLbit
+    wire        wb_idle;            // IDLE 提交 → IF 停取指
     // 特殊csr相关信号
     wire [ 1:0] plv_out;            // 特权等级输出
     wire [ 5:0] ecode_out;          // 异常码输出
@@ -218,6 +222,8 @@ module core_top (
     wire [ 5:0] srch_value;         // 发pre_mem tlbsrch查询结果
     wire        s0_cancel;           // MMU → ICache
     wire        s1_cancel;           // MMU → DCache
+    wire        preld_to_mmu;        // pre_mem → MMU（PRELD 门控）
+    wire        preld_to_dcache;     // pre_mem → DCache（PRELD 请求）
     wire        s0_need_mmu_r;       // MMU → if_stage
     wire        s1_need_mmu_r;       // MMU → mem_stage
     wire [`TLBRD_BUS_WD-1:0] tlbrd_value;
@@ -448,6 +454,8 @@ module core_top (
         .exc_back_pc        (exc_back_pc),
         .rf_valid           (rf_valid),
         .rf_pc              (wb_pc_back),
+        .wb_idle            (wb_idle),
+        .has_int            (has_int),
         .bp_btb_hit         (bp_btb_hit),
         .bp_btb_target      (bp_btb_target),
         .bp_btb_counter     (bp_btb_counter),
@@ -581,6 +589,8 @@ module core_top (
         .dcache_cpu_addr_ok  (dcache_cpu_addr_ok),
         .vtlb_enop           (vtlb_enop),
         .ld_and_str          (ld_and_str),
+        .preld_to_mmu        (preld_to_mmu),
+        .preld_to_dcache     (preld_to_dcache),
         .srch_value          (srch_value),
         .s1_need_mmu          (pre_mem_s1_need_mmu),
         .cacop_code          (cacop_code),
@@ -658,6 +668,8 @@ module core_top (
         .wb_ertn_flush     (wb_ertn_flush),
         .wb_csr_we         (wb_csr_we),
         .wb_csr_num        (wb_csr_num),
+        .wb_ll_w           (wb_ll_w),
+        .wb_idle           (wb_idle),
         .wb_to_csr_bus     (wb_to_csr_bus),
         .exc_no_rf         (exc_not_rf),
         .rf_valid          (rf_valid),
@@ -698,6 +710,7 @@ module core_top (
         .csr_id_num    (csr_id_num),
         .csr_rvalue    (csr_rvalue),
         .has_int       (has_int),
+        .wb_ll_w       (wb_ll_w),
         .wb_to_csr_bus (wb_to_csr_bus),
         .coreid_in     (32'd0),
         .hw_inter_num  (hw_inter_num),
@@ -755,6 +768,7 @@ module core_top (
         .vaddr_from_ex      (pre_mem_to_mmu_vaddr),
         .vtlb_enop          (vtlb_enop),
         .ld_and_str         (ld_and_str),
+        .preld              (preld_to_mmu),
         .ex_tag             (ex_tag),
         .ex_tlb_exc         (pre_mem_tlb_exc),
         .ex_cached          (mmu_ex_cached),
@@ -845,7 +859,8 @@ module core_top (
         .debug_perf_total_req     (debug0_icache_total_req),
         .debug_perf_access_cnt    (debug0_icache_access_cnt),
         .debug_perf_miss_cnt      (debug0_icache_miss_cnt),
-        .debug_perf_real_miss_cnt (debug0_icache_real_miss_cnt)
+        .debug_perf_real_miss_cnt (debug0_icache_real_miss_cnt),
+        .debug_perf_relookup_cnt  (debug0_icache_relookup_cnt)
     );
 
     // ================================================================
@@ -864,6 +879,7 @@ module core_top (
         .cpu_wdata     (dcache_cpu_wdata),
         .mmu_cache     (mmu_ex_cached),
         .mmu_cancel    (s1_cancel),
+        .preld         (preld_to_dcache),
         .cpu_addr_ok   (dcache_cpu_addr_ok),
         .cpu_data_ok   (dcache_cpu_data_ok),
         .cpu_rdata     (dcache_cpu_rdata),
@@ -893,7 +909,8 @@ module core_top (
         .debug_perf_access_cnt    (debug0_dcache_access_cnt),
         .debug_perf_miss_cnt      (debug0_dcache_miss_cnt),
         .debug_perf_real_miss_cnt (debug0_dcache_real_miss_cnt),
-        .debug_perf_vc_hit_cnt    (debug0_dcache_vc_hit_cnt)
+        .debug_perf_vc_hit_cnt    (debug0_dcache_vc_hit_cnt),
+        .debug_perf_relookup_cnt  (debug0_dcache_relookup_cnt)
     );
 
     // ================================================================

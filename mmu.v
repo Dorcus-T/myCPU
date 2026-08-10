@@ -16,6 +16,7 @@ module mmu (
     input  wire [31:0] vaddr_from_ex,
     input  wire [35:0] vtlb_enop,
     input  wire [ 1:0] ld_and_str,
+    input  wire        preld,           // PRELD 指令（屏蔽异常，uncached 时取消请求）
     output wire [19:0] ex_tag,         // 物理 tag → DCache，固定 paddr[31:12] 20-bit
     output wire [31:0] paddr_to_ex,     // 完整物理地址 → mem_stage
     output wire [ 5:0] srch_value,
@@ -245,6 +246,7 @@ module mmu (
     reg [ 1:0] plv_r;
     reg        load_r;
     reg        store_r;
+    reg        preld_r;
     always @(posedge clk) begin
         if (reset) begin
             s0_need_tlb_r  <= 1'b0;
@@ -252,6 +254,7 @@ module mmu (
             plv_r          <= 2'd0;
             load_r         <= 1'b0;
             store_r        <= 1'b0;
+            preld_r        <= 1'b0;
             s0_need_mmu_r  <= 1'b0;
             s1_need_mmu_r  <= 1'b0;
         end
@@ -261,6 +264,7 @@ module mmu (
             plv_r          <= plv;
             load_r         <= load;
             store_r        <= store;
+            preld_r        <= preld;
             s0_need_mmu_r  <= s0_need_mmu;
             s1_need_mmu_r  <= s1_need_mmu;
         end
@@ -390,8 +394,11 @@ module mmu (
                         exc_pis ? 5'b00010 :
                         exc_pme ? 5'b00001 : 5'b00000;
     // ---------- MEM 输出：统一 1 拍 ----------
-    assign ex_tlb_exc = s1_tlb_exc & {5{s1_need_tlb_r}};
-    assign s1_cancel  = |ex_tlb_exc;
+    // preld：屏蔽异常（mem 不报），但 PPE/PPL/PIL 或 uncached 时取消请求（视同 NOP，不能访存）
+    // s1_need_tlb_r 门控：DMW 窗口地址不查 TLB，s1_found=0 恒报 PPE，须屏蔽
+    assign ex_tlb_exc = s1_tlb_exc & {5{s1_need_tlb_r}} & {5{~preld_r}};
+    assign s1_cancel  = |ex_tlb_exc
+                      | (preld_r && ((|s1_tlb_exc && s1_need_tlb_r) || !ex_cached));
 
     wire [ 1:0] ex_mat_dmw_comb;
     wire [31:0] paddr_ex_dmw_comb;

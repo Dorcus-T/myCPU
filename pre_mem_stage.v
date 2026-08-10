@@ -16,6 +16,8 @@ module pre_mem_stage (
     output wire [31:0]              pre_mem_to_mmu_vaddr, // 虚地址输出
     output wire [35:0]              vtlb_enop,          // {tlbsrch_valid, invtlb_valid, invtlb_op, invtlb_asid, invtlb_vaddr}
     output wire [ 1:0]              ld_and_str,         // 输出操作是load还是store
+    output wire                     preld_to_mmu,       // PRELD 有效（门控，MMU 屏蔽异常用）
+    output wire                     preld_to_dcache,    // PRELD 请求（DCache fifo 门控用，下一步接入）
     input  wire [ 5:0]              srch_value,         // {s1_found, index}
     output wire                     s1_need_mmu,        // MEM 需要 MMU 翻译
     // 与 DCache 的接口
@@ -93,6 +95,13 @@ module pre_mem_stage (
     wire mem_sign_ext;                  // 符号扩展标志
     // ALU结果
     wire [31:0] alu_result;
+    // LL/SC 透传字段（ALE / 写回 mux 用）
+    wire        ll_w;                   // LL.W 指令
+    wire        sc_w;                   // SC.W 指令
+    // IDLE 透传字段（WB 提交后停取指）
+    wire        idle;                   // IDLE 指令
+    // PRELD 透传字段（MMU 屏蔽异常 + DCache 预取）
+    wire        preld;                  // PRELD 指令
     // CSR交互信号
     wire        res_from_csr;           // 结果来自csr寄存器堆
     wire [31:0] csr_rvalue;             // csr读数据
@@ -189,6 +198,10 @@ module pre_mem_stage (
     wire        bp_en_comb;
     wire [`BP_BUS_WD-1:0] bp_bus_next;
     assign {
+        preld,             // 630     PRELD 指令（MSB 端新增，不移动原有字段）
+        idle,              // 629     IDLE 指令
+        ll_w,              // 628     LL.W 指令
+        sc_w,              // 627     SC.W 指令
         bp_en_comb,        // 626     分支预测更新使能
         bp_bus_next,       // 625:524 分支预测更新数据
         cacop_code_int,    // 523:519 cache操作类型
@@ -231,7 +244,7 @@ module pre_mem_stage (
         gr_we,             // 69      寄存器写使能
         dest,              // 68:64   目标寄存器号
         alu_result,        // 63:32   ALU计算结果
-        pre_mem_pc              // 31:0    PC
+        pre_mem_pc         // 31:0    PC
     } = current_bus;
 
     // ========== 分支预测器更新（PRE_MEM 负责，bp_en_comb 来自 EX 总线） ==========
@@ -257,14 +270,19 @@ module pre_mem_stage (
     assign bp_bus       = bp_bus_r;
 
     // ========== ALE 检测（PRE_MEM 负责，EX 不检测访存对齐） ==========
+    // sc_w 项：失败 SC.W（mem_we=0）错位也要报 ALE（与 NEMU 一致：ALE 先于 llbit 判断）
     wire ale;
-    assign ale = (pre_mem_valid && (res_from_mem || mem_we)) &&
+    assign ale = (pre_mem_valid && (res_from_mem || mem_we || sc_w)) &&
                  ((mem_size[1] && (alu_result[0] != 1'b0)) ||
                   (mem_size[2] && (alu_result[1:0] != 2'b00)));
     // ========== 输出到MEM阶段的总线 ==========
     assign pre_mem_to_mem_bus = {
+        preld,             // 488     PRELD 指令（MSB 端新增，不移动原有字段）
+        idle,              // 487     IDLE 指令
+        ll_w,              // 486     LL.W 指令
+        sc_w,              // 485     SC.W 指令
         `ifdef DIFFTEST_EN
-        dift_csr_rvalue,   // 452:421 csr读数据 for difftest
+        dift_csr_rvalue,   // 484:453 csr读数据 for difftest
         dift_csr_rstat_en, // 420     csr estat读使能 for difftest
         dift_inst_st_en,   // 419:412 store使能 for difftest
         dift_inst_ld_en,   // 411:404 load使能 for difftest
@@ -303,10 +321,10 @@ module pre_mem_stage (
     };
 
     // ========== 流水线控制 ==========
-    assign is_mem_inst = (mem_we || res_from_mem);
-    assign s1_need_mmu = (mem_we || res_from_mem || cacop_en && (cacop_code_int[4:3] == 2'b10)) && can_req;
+    assign is_mem_inst = (mem_we || res_from_mem || preld);
+    assign s1_need_mmu = (mem_we || res_from_mem || preld || cacop_en && (cacop_code_int[4:3] == 2'b10)) && can_req;
     // ========== ready_go = work_done || !valid || lready ==========
-    wire is_mem_tlb = mem_we || res_from_mem || tlbsrch_en;
+    wire is_mem_tlb = mem_we || res_from_mem || preld || tlbsrch_en;
     wire is_cacop_i = cacop_en && (cacop_code_int[2:0] == 3'd0);
     wire is_cacop_d = cacop_en && (cacop_code_int[2:0] == 3'd1);
     wire cache_sent = (dcache_cpu_req && dcache_cpu_addr_ok) || req_already;
@@ -359,7 +377,9 @@ module pre_mem_stage (
     };
     assign final_csr_wmask  = tlbsrch_en && srch_value[5] ? 32'h8000001f : csr_wmask;
     assign final_csr_wvalue = tlbsrch_en && srch_value[5] ? {27'b0,srch_value[4:0]} : csr_wvalue;
-    assign ld_and_str       = {res_from_mem || (cacop_en && cacop_code_int[4:3] == 2'b10), mem_we} & {2{pre_mem_valid}};
+    assign ld_and_str       = {res_from_mem || preld || (cacop_en && cacop_code_int[4:3] == 2'b10), mem_we} & {2{pre_mem_valid}};
+    assign preld_to_mmu     = preld && can_req;   // 门控：气泡时寄存器残留 preld 会污染 s1_cancel
+    assign preld_to_dcache  = preld;                    // 未门控：dcache 仅在请求接受拍采样
 
     // ========== cacop相关信号 ==========
     assign cacop_code     = cacop_code_int;
@@ -369,7 +389,7 @@ module pre_mem_stage (
                           && !i_cacop_req_already && !d_cacop_req_already;
 
     // ========== DCache 输出信号 ==========
-    assign dcache_cpu_req   = can_req && !req_already && (mem_we || res_from_mem);
+    assign dcache_cpu_req   = can_req && !req_already && (mem_we || res_from_mem || preld);
     assign dcache_cpu_op    = mem_we;
     assign dcache_cpu_index = alu_result[`D_OFFSET_WIDTH +: `D_INDEX_WIDTH];
     assign dcache_cpu_offset= alu_result[0 +: `D_OFFSET_WIDTH];
@@ -382,7 +402,8 @@ module pre_mem_stage (
 
     // ========== 前递输出（给ID做stall检测 + 数据前递） ==========
     assign pre_mem_to_id_dest    = dest & {5{pre_mem_valid}} & {5{gr_we}};
-    assign pre_mem_to_id_result  = res_from_csr ? csr_rvalue : 
+    assign pre_mem_to_id_result  = sc_w ? {31'b0, csr_rvalue[0]} :  // SC.W 前递 rd 写回值（llbit 采样，ID 读）
+                                   res_from_csr ? csr_rvalue :
                                    res_from_timer ? timer_finalval :
                                    alu_result;
     assign pre_mem_to_id_load_op = res_from_mem & pre_mem_valid;

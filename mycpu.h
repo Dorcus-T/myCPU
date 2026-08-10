@@ -15,11 +15,11 @@
 // ============================================================================
 `define BR_BUS_WD           33                            // 分支总线宽度
 `define IF_TO_ID_BUS_WD     68                            // IF到ID总线
-`define ID_TO_EX_BUS_WD        413                           // ID到EX总线（+6 cacop, +114 difftest）
-`define EX_TO_PRE_MEM_BUS_WD   627                           // EX到PRE_MEM总线（524 + 1 bp_en + 102 bp_bus）
-`define PRE_MEM_TO_MEM_BUS_WD  485                           // PRE_MEM到MEM总线（= EX_TO_MEM_BUS_WD +32 dift_paddr）
+`define ID_TO_EX_BUS_WD        417                           // ID到EX总线（+6 cacop, +114 difftest, +2 ll_w/sc_w, +1 idle, +1 preld）
+`define EX_TO_PRE_MEM_BUS_WD   631                           // EX到PRE_MEM总线（524 + 1 bp_en + 102 bp_bus + 2 ll_w/sc_w + 1 idle + 1 preld）
+`define PRE_MEM_TO_MEM_BUS_WD  489                           // PRE_MEM到MEM总线（= EX_TO_MEM_BUS_WD +32 dift_paddr + 2 ll_w/sc_w + 1 idle + 1 preld）
 `define EX_TO_MEM_BUS_WD       485                           // EX到MEM总线（保留兼容）
-`define MEM_TO_WB_BUS_WD    481                           // MEM到WB总线（444 +37: ex_load_op/mem_sign_ext/mem_size/mem_rdata）
+`define MEM_TO_WB_BUS_WD    483                           // MEM到WB总线（444 +37: res_from_mem/mem_sign_ext/mem_size/mem_rdata + 1 ll_w + 1 idle）
 `define WB_TO_RF_BUS_WD     38                            // WB到寄存器文件
 `define WB_TO_CSR_BUS_WD    160                           // WB到CSR总线
 `define TLBCSR_BUS_WD       160                           // tlb相关CSR数据总线
@@ -51,13 +51,13 @@
 `undef  IF_TO_ID_BUS_WD
 `define IF_TO_ID_BUS_WD      111
 
-// ID→EX 总线：原 412 + 预测透传 42 + br_type 2 + cond_cmp 3 + br_offs 32 + is_branch 1 = 492 + static_taken 1 = 493
+// ID→EX 总线：原 412 + 预测透传 42 + br_type 2 + cond_cmp 3 + br_offs 32 + is_branch 1 = 492 + static_taken 1 + ll_w 1 + sc_w 1 + idle 1 = 496
 `undef  ID_TO_EX_BUS_WD
-`define ID_TO_EX_BUS_WD      493
+`define ID_TO_EX_BUS_WD      496
 
-// EX→PRE_MEM 总线：保持原 523（预测信息在 EX 消耗，不继续传）
-// PRE_MEM→MEM 总线：保持原 453
-// MEM→WB 总线：保持原 444
+// EX→PRE_MEM 总线：保持原 523 + 2（ll_w, sc_w）+ 1（idle）（预测信息在 EX 消耗，不继续传）
+// PRE_MEM→MEM 总线：保持原 453 + 2（ll_w, sc_w）+ 1（idle）
+// MEM→WB 总线：保持原 444 + 1（ll_w）+ 1（idle）
 
 // ============================================================================
 // 误预测纠正总线（EX → IF，仅 EX 级驱动）

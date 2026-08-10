@@ -85,6 +85,13 @@ module exe_stage (
     wire mem_sign_ext;                  // 符号扩展标志
     wire is_div_inst;                   // 判断是否为除法指令，控制流水线前进
     wire is_mul_inst;                   // 判断是否为乘法指令，控制流水线前进
+    // LL/SC 透传字段（前递 / ALE / 写回 mux 用）
+    wire        ll_w;                   // LL.W 指令
+    wire        sc_w;                   // SC.W 指令
+    // IDLE 透传字段（WB 提交后停取指）
+    wire        idle;                   // IDLE 指令
+    // PRELD 透传字段（MMU 屏蔽异常 + DCache 预取）
+    wire        preld;                  // PRELD 指令
     // ALU操作数
     wire [31:0] alu_src1;
     wire [31:0] alu_src2;
@@ -127,10 +134,14 @@ module exe_stage (
     wire [113:0] _unused_diff_pad;
     `endif
 
-    // ========== 解析来自ID阶段的总线（493 bit）==========
+    // ========== 解析来自ID阶段的总线（496 bit）==========
     assign {
+        preld,              // 496    PRELD 指令（MSB 端新增，不移动原有字段）
+        idle,               // 495    IDLE 指令
+        ll_w,               // 494    LL.W 指令
+        sc_w,               // 493    SC.W 指令
         `ifdef DIFFTEST_EN
-        dift_csr_rstat_en,  // 475     csr estat读使能 for difftest
+        dift_csr_rstat_en,  // 492     csr estat读使能 for difftest
         dift_inst_st_en,    // 474:467 store使能 for difftest
         dift_inst_ld_en,    // 466:459 load使能 for difftest
         dift_cnt_inst,      // 458     计数器指令 for difftest
@@ -268,7 +279,7 @@ module exe_stage (
 
     // -------- 实际分支方向：br_type[1]|~br_type[0] 覆盖无条件跳转，条件分支取 ex_cond_taken
     wire ex_br_taken_actual;
-    assign ex_br_taken_actual = ex_br_type[1] | ~ex_br_type[0] | ex_cond_taken;
+    assign ex_br_taken_actual = (ex_br_type[1] | ~ex_br_type[0] | ex_cond_taken) && ex_is_branch;
 
     // -------- 实际分支目标 --------
     // JIRL 是唯一的寄存器相对分支（rj + offset），其余全是 PC 相对
@@ -285,11 +296,10 @@ module exe_stage (
     // 有效预测 = pred_valid && pred_taken；无预测时视为"不跳"（顺序取指）
     // 方向错 = 实际方向 ≠ (预测有效且预测跳转)
     wire ex_mispredict_raw;
-    assign ex_mispredict_raw = ex_is_branch&& (
+    assign ex_mispredict_raw = ex_is_branch && (
         (ex_br_taken_actual != ((ex_pred_valid && ex_pred_taken) || ex_static_taken))           // 方向错（含冷启动：无预测→视为不跳）
-        || (ex_br_taken_actual && ex_pred_valid
-            && |(ex_pred_target ^ ex_br_target_actual[31:2]))               // 目标错（XOR 树，仅预测为跳时才检查）
-    );
+        || (ex_br_taken_actual && ex_pred_valid && |(ex_pred_target ^ ex_br_target_actual[31:2]))               // 目标错（XOR 树，仅预测为跳时才检查）
+    ) || bp_del;  // 删除分支预测（预测为跳，但实际不是分支指令）
 
     // 对外输出（can_req 门控）
     assign ex_mispredict  = ex_mispredict_raw && can_req;
@@ -340,6 +350,10 @@ module exe_stage (
 
     // ========== 输出到PRE_MEM阶段的总线 ==========
     assign ex_to_pre_mem_bus = {
+        preld,                 // 630     PRELD 指令（MSB 端新增，不移动原有字段）
+        idle,                  // 629     IDLE 指令
+        ll_w,                  // 628     LL.W 指令
+        sc_w,                  // 627     SC.W 指令
         bp_en_comb,            // 626     分支预测更新使能（PRE_MEM 消费）
         bp_bus_next,           // 625:524 分支预测更新数据（PRE_MEM 消费）
         cacop_code,            // 523:519 cache操作类型（PRE_MEM 消费）
@@ -459,7 +473,8 @@ module exe_stage (
 
     // ========== 前递输出 ==========
     assign ex_to_id_dest    = dest & {5{ex_valid}} & {5{gr_we}};
-    assign ex_to_id_result  = res_from_csr ? csr_rvalue_actual :
+    assign ex_to_id_result  = sc_w ? {31'b0, csr_rvalue[0]} :   // SC.W 前递 rd 写回值（llbit 采样，ID 读）
+                              res_from_csr ? csr_rvalue_actual :
                               res_from_timer ? timer_finalval :
                               alu_result;                  // 计算结果
     assign ex_to_id_load_op = res_from_mem & ex_valid;     // 加载指令标志（load-use检测用）

@@ -29,6 +29,9 @@ module if_stage (
     // 重取指相关
     input  wire                     rf_valid,            // 重取指信号
     input  wire [31:0]              rf_pc,               // 重取指地址
+    // IDLE 相关
+    input  wire                     wb_idle,             // IDLE 提交 → 置 if_idle（停取指）
+    input  wire                     has_int,             // 中断唤醒 → 清 if_idle
     // 来自分支预测器
     input  wire                     bp_btb_hit,          // BTB 命中
     input  wire [29:0]              bp_btb_target,       // BTB 目标
@@ -127,6 +130,15 @@ module if_stage (
     reg  [31:0]               pre_if_pc_n;             // 新 PC（寄存器）
     reg  [`PRE_IF_BUS_WD-1:0] pre_if_data_o;           // 旧数据（全寄存器）
     reg                       pre_if_valid_o;           // 旧有效
+    reg                       if_idle_r;               // IDLE 等待：1=停取指（wb_idle 置位，reset/has_int 清位）
+
+    // IDLE 等待期间 pre_if 无法握手（ldata[0]=0）→ pre_if_current 用旧数据，
+    // pre_if_pc_r 固定为 IDLE+4（重取指替换后的值），唤醒后从该处恢复取指
+    always @(posedge clk) begin
+        if (reset)            if_idle_r <= 1'b0;
+        else if (has_int)     if_idle_r <= 1'b0;       // 中断唤醒
+        else if (wb_idle)     if_idle_r <= 1'b1;       // IDLE 提交
+    end
 
     always @(posedge clk) begin
         if (reset) pre_if_pc_n <= 32'h1c000000;
@@ -192,7 +204,8 @@ module if_stage (
 
     assign s0_need_mmu = can_req;
 
-    wire can_req = pre_if_valid && !pre_if_adef && lpower[0] && !reset;
+    // if_idle：IDLE 等待期间 pre_if 不允许发起新的取指请求（含 MMU 翻译）
+    wire can_req = pre_if_valid && !pre_if_adef && lpower[0] && !reset && !if_idle_r;
 
     // ========== 指令信息 ==========
     wire [31:0] if_inst;

@@ -49,7 +49,7 @@ echo ===============================================================
 echo.
 
 echo [1/4] Building %BENCH%...
-wsl -d Ubuntu-22.04 -e bash -c "export PATH=/home/dorcus_t/chiplab/toolchains/loongson-gnu-toolchain-8.3-x86_64-loongarch32r-linux-gnusf-v2.0/bin:$PATH; cd %WSL_PERF%; make %BENCH%"
+wsl -d Ubuntu-22.04 -e bash -c "export PATH=/home/dorcus_t/chiplab/toolchains/loongson-gnu-toolchain-8.3-x86_64-loongarch32r-linux-gnusf-v2.0/bin:$PATH; cd %WSL_PERF%; rm -f start.o; make %BENCH%"
 if errorlevel 1 (echo ERROR: Build failed! && pause && exit /b 1)
 echo    Build OK.
 echo.
