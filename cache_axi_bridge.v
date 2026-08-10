@@ -78,14 +78,14 @@ module cache_axi_bridge (
     // ============================================================
     // 局部参数 — 由头文件 I/D_LINE_WORDS 推导
     // ============================================================
-    localparam IC_BEATS     = `I_LINE_WORDS;               // icache 行 = 几个 32-bit beat
-    localparam IC_BEAT_W    = $clog2(IC_BEATS);            // beat 计数位宽
-    localparam IC_BURST_LEN = IC_BEATS - 1;                // AXI arlen
+    localparam IC_BEATS       = `I_LINE_WORDS;              // icache 行 = 几个 32-bit beat
+    localparam IC_BEAT_W      = $clog2(IC_BEATS);           // beat 计数位宽
+    localparam IC_BURST_LEN   = IC_BEATS - 1;               // AXI arlen
     localparam IC_LINE_BYTES  = IC_BEATS * 4;               // icache 行字节数
     localparam I_BYTE_WD      = $clog2(IC_LINE_BYTES + 1);  // icache 读冲突字节位宽
-    localparam DC_BEATS       = `D_LINE_WORDS;               // dcache 行 beat 数
-    localparam DC_BEAT_W      = $clog2(DC_BEATS);            // beat 计数位宽
-    localparam DC_BURST_LEN   = DC_BEATS - 1;                // AXI arlen/awlen
+    localparam DC_BEATS       = `D_LINE_WORDS;              // dcache 行 beat 数
+    localparam DC_BEAT_W      = $clog2(DC_BEATS);           // beat 计数位宽
+    localparam DC_BURST_LEN   = DC_BEATS - 1;               // AXI arlen/awlen
     localparam DC_LINE_BYTES  = DC_BEATS * 4;               // dcache 行字节数
     localparam D_BYTE_WD      = $clog2(DC_LINE_BYTES + 1);  // dcache 写追踪字节位宽
     localparam RD_BYTE_WD     = (I_BYTE_WD > D_BYTE_WD) ? I_BYTE_WD : D_BYTE_WD;  // 函数端口位宽取最大
@@ -114,9 +114,9 @@ module cache_axi_bridge (
     reg  [32*DC_BEATS-1:0] dc_wr_buf_data;
 
     // ========== Buffer Burst 检测 ==========
-    wire is_ic_rd_burst_buf;
-    wire is_dc_rd_burst_buf;
-    wire is_dc_wr_burst_buf;
+    wire   is_ic_rd_burst_buf;
+    wire   is_dc_rd_burst_buf;
+    wire   is_dc_wr_burst_buf;
     assign is_ic_rd_burst_buf  = (ic_rd_buf_type  == 3'b100);
     assign is_dc_rd_burst_buf  = (dc_rd_buf_type  == 3'b100);
     assign is_dc_wr_burst_buf  = (dc_wr_buf_type  == 3'b100);
