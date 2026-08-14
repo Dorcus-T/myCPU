@@ -844,7 +844,7 @@ module id_stage (
     // 简化：后面任意写csr就堵中断，任意ertn也堵
     wire any_ertn_downstream = ex_ertn_flush || pre_mem_ertn_flush || mem_ertn_flush || wb_ertn_flush;
     wire any_csr_we_downstream = ex_csr_we || pre_mem_csr_we || mem_csr_we || wb_csr_we;
-    assign int_csr_stall = has_int && (any_csr_we_downstream || any_ertn_downstream);
+    assign int_csr_stall = intr && (any_csr_we_downstream || any_ertn_downstream);
 
     // 读csr指令与后面写同一个 CSR 冲突（简化：仅比较 csr 号相等）
     // tlbsrch 额外检查 TLBEHI 冲突；ESTAT 额外检查 TICLR 冲突（TICLR 写会清 ESTAT）

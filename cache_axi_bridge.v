@@ -261,7 +261,13 @@ module cache_axi_bridge (
 
     assign arvalid = dc_rd_buf_win || ic_rd_buf_win;
     assign arid    = dc_rd_buf_win ? 4'd1 : 4'd0;
-    assign araddr  = dc_rd_buf_win ? dc_rd_buf_addr : ic_rd_buf_addr;
+    // AXI 字读地址须 4 字节对齐：非 burst 读对齐到字，避免非对齐地址被下游
+    // 按递增多读 3 字节命中副作用寄存器（如 UART RB 会弹走接收 FIFO）
+    wire [31:0] dc_axi_rd_addr = is_dc_rd_burst_buf ? dc_rd_buf_addr
+                                                     : {dc_rd_buf_addr[31:2], 2'b00};
+    wire [31:0] ic_axi_rd_addr = is_ic_rd_burst_buf ? ic_rd_buf_addr
+                                                     : {ic_rd_buf_addr[31:2], 2'b00};
+    assign araddr  = dc_rd_buf_win ? dc_axi_rd_addr : ic_axi_rd_addr;
     assign arsize  = 3'b010;
     assign arlen   = dc_rd_buf_win ? (is_dc_rd_burst_buf ? DC_BURST_LEN[7:0] : 8'h00)
                                     : (is_ic_rd_burst_buf  ? IC_BURST_LEN[7:0] : 8'h00);

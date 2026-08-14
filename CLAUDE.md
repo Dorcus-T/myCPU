@@ -8,7 +8,7 @@ LoongArch (LA) 6级顺序流水线 CPU，FPGA 原型验证用。
 | 前推网络 | EX/MEM/WB → ID 全旁路（PRE_MEM 参与 stall 不参与前递） |
 | 冒险处理 | Load-use 停顿（EX/PRE_MEM/MEM）、CSR/ERTN 互锁 |
 | 总线接口 | AXI3 Master，cache_axi_bridge 桥接 |
-| Cache | 2路组相联 ICache + DCache，各 8KB (256行×32B)；DCache 写直通 AXI（bridge 写缓冲+挂起计数） |
+| Cache | 2路组相联 ICache 32KB (256组×64B) + DCache 64KB (1024组×32B)；DCache 写直通 AXI（bridge 写缓冲+挂起计数） |
 | TLB | 32项全相联 MTLB + STLB，虚拟地址翻译 |
 | 乘法器 | 64×64 流水线（3级，mult/unsigned/signed 三结果并行，96位输出） |
 | 除法器 | 串行迭代，多拍完成，带握手停顿 |

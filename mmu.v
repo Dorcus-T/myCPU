@@ -389,9 +389,9 @@ module mmu (
     assign exc_pme = store_r && !s1_d;
 
     assign s1_tlb_exc = exc_ppe ? 5'b10000 :
-                        exc_ppl ? 5'b01000 :
                         exc_pil ? 5'b00100 :
                         exc_pis ? 5'b00010 :
+                        exc_ppl ? 5'b01000 :
                         exc_pme ? 5'b00001 : 5'b00000;
     // ---------- MEM 输出：统一 1 拍 ----------
     // preld：屏蔽异常（mem 不报），但 PPE/PPL/PIL 或 uncached 时取消请求（视同 NOP，不能访存）
