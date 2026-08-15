@@ -1,6 +1,6 @@
 # ILA Debug Signals
 
-> ILA IP: `ila_0` | 采样时钟: `cpu_clk` (80MHz) | 总探头: 63 | 总宽度: ~630 bit
+> ILA IP: `ila_0` | 采样时钟: `cpu_clk` (80MHz) | 总探头: 63 | 总宽度: 863 bit（已按实际 RTL 修正，2025-06）
 
 ## Probe 索引
 
@@ -32,7 +32,7 @@
 
 | probe | 信号 | 位宽 | 来源 | 说明 |
 |-------|------|------|------|------|
-| 14 | `debug_icache_state` | 4 | `icache.v` | 主状态机：1=IDLE, 2=LOOKUP, 4=WAITRD, 8=REFILL |
+| 14 | `debug_icache_state` | 5 | `icache.v` | 主状态机：1=IDLE, 2=LOOKUP, 4=WAITRD, 8=REFILL, 16=RELOOKUP |
 | 15 | `debug_icache_rd_req` | 1 | `icache.v` | AXI 读请求 |
 | 16 | `debug_icache_mmu_tag` | 20 | `icache.v` | MMU 物理 tag |
 | 17 | `debug_icache_cpu_index` | 8 | `icache.v` | 当前请求的 cache 行索引 |
@@ -62,25 +62,25 @@
 
 | probe | 信号 | 位宽 | 来源 | 说明 |
 |-------|------|------|------|------|
-| 29 | `debug_dcache_state` | 7 | `dcache.v` | 主状态机：1=IDLE, 2=LOOKUP, 4=REREAD, 8=WAITWR, 16=WAIT_WR_DONE, 32=WAITRD, 64=REFILL |
+| 29 | `debug_dcache_state` | 8 | `dcache.v` | 主状态机：1=IDLE, 2=LOOKUP, 4=REREAD, 8=WAITWR, 16=WAIT_WR_DONE, 32=WAITRD, 64=REFILL, 128=RELOOKUP |
 | 30 | `debug_dcache_rd_req` | 1 | `dcache.v` | AXI 读请求 |
 | 31 | `debug_dcache_mmu_tag` | 20 | `dcache.v` | MMU 物理 tag |
-| 32 | `debug_dcache_cpu_index` | 8 | `dcache.v` | 当前请求的 cache 行索引 |
+| 32 | `debug_dcache_cpu_index` | 10 | `dcache.v` | 当前请求的 cache 行索引 |
 | 33 | `debug_dcache_refill_cached` | 1 | `dcache.v` | 重填行是否 cacheable |
-| 34 | `debug_dcache_refill_index` | 8 | `dcache.v` | 正在重填的行索引 |
-| 35 | `debug_dcache_req_index` | 8 | `dcache.v` | 当前 miss 请求的行索引 |
+| 34 | `debug_dcache_refill_index` | 10 | `dcache.v` | 正在重填的行索引 |
+| 35 | `debug_dcache_req_index` | 10 | `dcache.v` | 当前 miss 请求的行索引 |
 | 36 | `debug_pre_mem_pc` | 32 | `pre_mem_stage.v` | PRE_MEM 级 PC |
 | 37 | `debug_alu_result` | 32 | `pre_mem_stage.v` | ALU 计算结果（访存地址） |
 | 38 | `debug_dcache_mmu_cache` | 1 | `dcache.v` | MMU cacheable 属性 |
 | 39 | `debug_dcache_req_op` | 1 | `dcache.v` | 请求操作类型（0=load, 1=store） |
-| 40 | `debug_dcache_req_offset` | 4 | `dcache.v` | 请求块内偏移 |
-| 41 | `debug_dcache_refill_tag` | 20 | `dcache.v` | 重填物理 tag |
-| 42 | `debug_dcache_refill_offset` | 4 | `dcache.v` | 重填块内偏移 |
+| 40 | `debug_dcache_req_offset` | 5 | `dcache.v` | 请求块内偏移 |
+| 41 | `debug_dcache_refill_tag` | 17 | `dcache.v` | 重填物理 tag（`D_TAG_WIDTH`） |
+| 42 | `debug_dcache_refill_offset` | 5 | `dcache.v` | 重填块内偏移 |
 | 43 | `debug_dcache_wr_req` | 1 | `dcache.v` | 写请求 |
 | 44 | `debug_dcache_wr_type` | 3 | `dcache.v` | 写类型（AXI size） |
 | 45 | `debug_dcache_wr_addr` | 32 | `dcache.v` | 写地址 |
 | 46 | `debug_dcache_wr_wstrb` | 4 | `dcache.v` | 写字节掩码 |
-| 47 | `debug_dcache_wr_data` | 128 | `dcache.v` | write-back 数据（128位 = 4 bank） |
+| 47 | `debug_dcache_wr_data` | 256 | `dcache.v` | write-back 数据（256位 = 8 word） |
 | 48 | `debug_dcache_wr_rdy` | 1 | `mycpu_top.v` → bridge | bridge 写就绪 |
 | 49 | `debug_dcache_wr_done` | 1 | `mycpu_top.v` → bridge | bridge 写完成 |
 
@@ -117,7 +117,7 @@
 
 ## 状态机编码
 
-### ICache (`debug_icache_state`) — 4-bit one-hot
+### ICache (`debug_icache_state`) — 5-bit one-hot
 
 | 值 | 状态 |
 |----|------|
@@ -125,8 +125,9 @@
 | 2 | LOOKUP |
 | 4 | WAITRD |
 | 8 | REFILL |
+| 16 | RELOOKUP |
 
-### DCache (`debug_dcache_state`) — 7-bit one-hot
+### DCache (`debug_dcache_state`) — 8-bit one-hot
 
 | 值 | 状态 |
 |----|------|
@@ -137,6 +138,7 @@
 | 16 | WAIT_WR_DONE |
 | 32 | WAITRD |
 | 64 | REFILL |
+| 128 | RELOOKUP |
 
 ## 涉及修改的源文件
 
@@ -147,8 +149,8 @@
 | `IP/myCPU/dcache.v` | `debug_main_state`(7-bit), `debug_rd_req`, `debug_mmu_tag`, `debug_cpu_index`, `debug_refill_cached`, `debug_refill_index`, `debug_req_index`, `debug_mmu_cache`, `debug_req_op`, `debug_req_offset`, `debug_refill_tag`, `debug_refill_offset`, `debug_dc_wr_req`, `debug_dc_wr_type`, `debug_dc_wr_addr`, `debug_dc_wr_wstrb`, `debug_dc_wr_data` 端口 |
 | `IP/myCPU/pre_mem_stage.v` | `debug_pre_mem_pc`, `debug_alu_result` 端口 |
 | `IP/myCPU/cache_axi_bridge.v` | `debug_arvalid`, `debug_icache_return_data`, `debug_ic_rd_buf_valid`, `debug_ic_rd_buf_addr`, `debug_dc_wr_buf_valid`, `debug_awvalid`, `debug_aw_done`, `debug_wvalid`, `debug_bready`, `debug_wr_pend_cnt`, `debug_wr_pend_full`, `debug_dcache_wr_rdy`, `debug_wr_aw_done_r`, `debug_wr_w_done_r` 端口 |
-| `IP/myCPU/mycpu_top.v` | 全部 debug 输出端口透传 + `assign` 连接 |
-| `chip/soc_demo/nscscc-team/soc_top.v` | `ila_0` 例化（63 probe），全部 debug wire 声明和 `core_top` 连接 |
+| `IP/myCPU/mycpu_top.v` | 58 个顶层 debug 输出端口透传 + `assign` 连接（`debug_wb_*` 复用已有 `debug0_wb_*`） |
+| `chip/soc_demo/loongson/soc_top.v` | 63 根 `(* mark_debug = "true" *)` debug wire 声明、`core_top cpu_mid` 全部连接、注释掉的 `ila_0` 例化模板（加完 IP 取消注释即可） |
 
 ## 常用触发配置
 
