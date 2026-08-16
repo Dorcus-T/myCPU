@@ -68,9 +68,8 @@ module core_top (
     output wire [31:0]  debug0_icache_relookup_cnt,  // ICache VIPT 别名重查次数
     output wire [31:0]  debug0_dcache_total_req,   // DCache 访存指令总数
     output wire [31:0]  debug0_dcache_access_cnt,  // DCache 查找次数（cached）
-    output wire [31:0]  debug0_dcache_miss_cnt,    // DCache L1 miss（含 VC hit）
+    output wire [31:0]  debug0_dcache_miss_cnt,    // DCache L1 miss 次数
     output wire [31:0]  debug0_dcache_real_miss_cnt, // DCache 真实 miss 次数
-    output wire [31:0]  debug0_dcache_vc_hit_cnt,  // DCache VC 命中次数
     output wire [31:0]  debug0_dcache_relookup_cnt, // DCache VIPT 别名重查次数
     // ILA debug 输出（63 探针；debug_wb_* 复用上方 debug0_wb_*）
     output wire         debug_exc_not_rf,           // 异常提交标志（触发用）
@@ -1032,7 +1031,6 @@ module core_top (
         .debug_perf_access_cnt    (debug0_dcache_access_cnt),
         .debug_perf_miss_cnt      (debug0_dcache_miss_cnt),
         .debug_perf_real_miss_cnt (debug0_dcache_real_miss_cnt),
-        .debug_perf_vc_hit_cnt    (debug0_dcache_vc_hit_cnt),
         .debug_perf_relookup_cnt  (debug0_dcache_relookup_cnt),
         // ILA debug
         .debug_main_state    (debug0_dcache_state),

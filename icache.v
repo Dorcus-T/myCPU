@@ -138,7 +138,7 @@ module icache (
 
     // VIPT 别名检测 — index 高位越界进页号时与物理 tag 低位比较
     wire mmu_index_cancel = main_lookup && !cacop_en_r && (req_index[`I_INDEX_WIDTH-1 : 12 - `I_OFFSET_WIDTH] != mmu_tag[MMU_TAG_WD - `I_TAG_WIDTH - 1 : 0]);
-    wire mmu_index_cancel_cacop = main_lookup && cacop_en_r && (cacop_code_r == 2'b10) && (cacop_index_r[`I_INDEX_WIDTH-1 : 12 - `I_OFFSET_WIDTH] != mmu_cacop_tag[MMU_TAG_WD - `I_TAG_WIDTH - 1 : 0]);
+    wire mmu_index_cancel_cacop = main_lookup && cacop_en_r && (cacop_code_r[4:3] == 2'b10) && (cacop_index_r[`I_INDEX_WIDTH-1 : 12 - `I_OFFSET_WIDTH] != mmu_cacop_tag[MMU_TAG_WD - `I_TAG_WIDTH - 1 : 0]);
 
     // ============================================================
     // Tag 比较与命中判断
@@ -361,6 +361,7 @@ module icache (
         else if (main_relookup && !cache_hit) begin
             refill_index        <= req_index;
             refill_replace_way  <= replace_way;
+            refill_way_hit_r    <= way_hit;   // 物理 index 重查结果：hit 型 cacop 靠它决定是否失效
         end
         else if (main_refill && return_valid) begin
             refill_cnt <= refill_cnt + 1'b1;

@@ -89,7 +89,7 @@ echo   fireye_A0  fireye_B2  fireye_C0  fireye_D1  fireye_I2
 echo   allbench
 echo.
 echo Options:  -v (per-cycle PC)  -w (fst waveform)  -d (difftest)
-echo   -s hex: 仿真拨码开关输入值（默认 0xff 全上拉）
+echo   -s hex: 仿真拨码开关输入值（默认 0xaa，与 NEMU 参考一致；0xaa 低5位=0x1a 即 dhrystone）
 echo            仅 allbench 需要：低 5 位选 benchmark
 echo            0x1f=end 0x1e=bitcount 0x1d=bubble_sort 0x1c=coremark
 echo            0x1b=crc32 0x1a=dhrystone 0x19=quick_sort 0x18=select_sort

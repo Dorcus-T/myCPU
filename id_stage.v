@@ -112,7 +112,7 @@ module id_stage (
 
     // ── → linectrl ──
     assign id_valid_o = id_valid;
-    assign id_exc_o   = id_exc_valid;
+    assign id_exc_o   = id_exc_valid && !int_csr_stall;
     assign id_ertn_o  = id_ertn_flush;
     assign id_ertn_flush = 1'b0;
 
@@ -341,7 +341,6 @@ module id_stage (
 
     // ========== 流水线停顿检测 ==========
     wire load_use_stall;                 // load-use冒险需要停顿
-    wire csr_stall;                      // csr与ertn有关冒险
     wire int_csr_stall;                  // 中断与csr有关冒险
     wire inst_csr_stall;                 // csr指令有关冒险
     wire calc_stall;                     // 乘除法计算结果未就绪停顿
@@ -753,10 +752,10 @@ module id_stage (
         id_static_taken       // 1   静态分支预测
     };  // 总计 412 + 80 + 1 + 2 + 1 = 496
 
-    assign work_done = id_exc_valid || (!load_use_stall && !csr_stall && !calc_stall);
+    assign work_done = id_exc_valid ? !int_csr_stall : (!load_use_stall && !inst_csr_stall && !calc_stall);
     
-    wire rf_ctrl = ((csr_we && (csr_id_num == `CSR_ASID || csr_id_num == `CSR_TCFG || csr_id_num == `CSR_CRMD && csr_wmask[`CSR_CRMD_PG : `CSR_CRMD_DA] != 2'b0
-                            || (csr_id_num == `CSR_DMW0 || csr_id_num == `CSR_DMW1 || csr_id_num == `CSR_CRMD && csr_wmask[`CSR_CRMD_PLV] != 2'b0) && csr_da_pg == 2'b01)
+    wire rf_ctrl = ((csr_we && (csr_id_num == `CSR_ASID || csr_id_num == `CSR_TCFG || csr_id_num == `CSR_CRMD || csr_id_num == `CSR_ECFG
+                            || (csr_id_num == `CSR_DMW0 || csr_id_num == `CSR_DMW1) && csr_da_pg == 2'b01)
                             || inst_tlbrd || inst_invtlb || inst_tlbwr || inst_tlbfill || inst_idle) || (cacop_code[2:0] == 3'b000) && cacop_en) && !id_exc_valid && id_valid;
     reg rf_r;
     // 重取指信号生成
@@ -867,7 +866,6 @@ module id_stage (
                          || (wb_csr_we      && wb_csr_num == csr_id_num)
                          || (read_estat && any_ticlr_write)
                          || (read_pgd   && any_pgdl_pgdh_write));
-    assign csr_stall = inst_csr_stall || int_csr_stall;
 
     // ========== 检测异常 ==========
     assign ipe = 1'b0; // 指令特权等级错例外//占位

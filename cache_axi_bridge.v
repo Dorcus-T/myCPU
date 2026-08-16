@@ -309,16 +309,9 @@ module cache_axi_bridge (
     // ============================================================
     // 写路径 — 握手（Buffer → 总线）
     // ============================================================
-    wire aw_done;
-    assign aw_done = (dc_wr_buf_valid && awready && !wr_pend_full) || wr_aw_done_r;
+    wire aw_done = (awvalid && awready) || wr_aw_done_r;
 
-    wire w_done;
-    assign w_done = (dc_wr_buf_valid && wready && !wr_pend_full
-                     && (is_dc_wr_burst_buf ? (wr_beat == DC_BURST_LEN) : 1'b1))
-                     || wr_w_done_r;
-
-    wire single_wr_done;
-    assign single_wr_done = aw_done && w_done && !is_dc_wr_burst_buf;
+    wire w_done = (wvalid && wready && wlast) || wr_w_done_r;
 
     // ========== 握手寄存器 — 时序 ==========
     always @(posedge clk) begin
@@ -328,19 +321,17 @@ module cache_axi_bridge (
             wr_beat      <= {DC_BEAT_W{1'b0}};
         end
         else begin
-            if (dc_wr_buf_valid && awready && !wr_pend_full && !wr_aw_done_r)
+            if (awvalid && awready)
                 wr_aw_done_r <= 1'b1;
-            if (dc_wr_buf_valid && wready && !wr_pend_full
-                && (is_dc_wr_burst_buf ? (wr_beat == DC_BURST_LEN) : 1'b1)
-                && !wr_w_done_r)
+            if (wvalid && wready && wlast)
                 wr_w_done_r <= 1'b1;
-            if ((aw_done && w_done)) begin
+            if (aw_done && w_done) begin
                 wr_aw_done_r <= 1'b0;
                 wr_w_done_r  <= 1'b0;
             end
-            if (dc_wr_buf_valid && wready && !wr_pend_full && is_dc_wr_burst_buf && wr_beat != DC_BURST_LEN)
+            if (wvalid && wready && is_dc_wr_burst_buf && !wlast)
                 wr_beat <= wr_beat + 1'b1;
-            else if ((aw_done && w_done))
+            else if (aw_done && w_done)
                 wr_beat <= {DC_BEAT_W{1'b0}};
         end
     end
@@ -381,11 +372,6 @@ module cache_axi_bridge (
     assign wstrb  = dc_wr_buf_valid ? dc_wr_buf_wstrb : 4'b0;
     assign wlast  = dc_wr_buf_valid ? (is_dc_wr_burst_buf ? (wr_beat == DC_BURST_LEN) : 1'b1) : 1'b0;
 
-    // ========== 写完成检测 ==========
-    wire wr_complete;
-    assign wr_complete = single_wr_done
-                       || ((aw_done && w_done) && is_dc_wr_burst_buf);
-
     // ============================================================
     // 写追踪 FIFO — push / pop 时序
     // ============================================================
@@ -401,10 +387,10 @@ module cache_axi_bridge (
             end
         end
         else begin
-            case ({wr_complete, (bvalid && bready)})
+            case ({aw_done && w_done, (bvalid && bready)})
                 2'b10: begin
                     wr_pend_addr[wr_pend_wptr]  <= dc_wr_buf_addr;
-                    wr_pend_bytes[wr_pend_wptr] <= single_wr_done
+                    wr_pend_bytes[wr_pend_wptr] <= !is_dc_wr_burst_buf
                                                   ? wr_total_bytes(dc_wr_buf_type)
                                                   : DC_LINE_BYTES[D_BYTE_WD-1:0];
                     wr_pend_wptr <= wr_pend_wptr + 2'd1;
@@ -416,7 +402,7 @@ module cache_axi_bridge (
                 end
                 2'b11: begin
                     wr_pend_addr[wr_pend_wptr]  <= dc_wr_buf_addr;
-                    wr_pend_bytes[wr_pend_wptr] <= single_wr_done
+                    wr_pend_bytes[wr_pend_wptr] <= !is_dc_wr_burst_buf
                                                   ? wr_total_bytes(dc_wr_buf_type)
                                                   : DC_LINE_BYTES[D_BYTE_WD-1:0];
                     wr_pend_wptr <= wr_pend_wptr + 2'd1;
