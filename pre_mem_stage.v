@@ -25,7 +25,7 @@ module pre_mem_stage (
     output wire                     dcache_cpu_op,      // DCache 操作类型（1=写）
     output wire [`D_INDEX_WIDTH-1:0]  dcache_cpu_index,   // DCache 组索引
     output wire [`D_OFFSET_WIDTH-1:0] dcache_cpu_offset,  // DCache 块内偏移
-    output wire [ 3:0]              dcache_cpu_wstrb,   // DCache 写字节掩码
+    output wire [ 3:0]              dcache_cpu_byte_enable, // DCache 字节使能
     output wire [31:0]              dcache_cpu_wdata,   // DCache 写数据
     input  wire                     dcache_cpu_addr_ok, // DCache 地址就绪
     // cacop相关
@@ -393,7 +393,7 @@ module pre_mem_stage (
     assign dcache_cpu_op    = mem_we;
     assign dcache_cpu_index = alu_result[`D_OFFSET_WIDTH +: `D_INDEX_WIDTH];
     assign dcache_cpu_offset= alu_result[0 +: `D_OFFSET_WIDTH];
-    assign dcache_cpu_wstrb  = mem_size[0] ? (4'b0001 << alu_result[1:0]) :
+    assign dcache_cpu_byte_enable  = mem_size[0] ? (4'b0001 << alu_result[1:0]) :
                                mem_size[1] ? (alu_result[1] ? 4'b1100 : 4'b0011) :
                                4'b1111;
     assign dcache_cpu_wdata  = mem_size[0] ? {4{rkd_value[7:0]}} :

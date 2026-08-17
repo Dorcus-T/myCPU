@@ -249,7 +249,7 @@ module core_top (
     wire                        dcache_cpu_op;
     wire [`D_INDEX_WIDTH-1:0]   dcache_cpu_index;
     wire [`D_OFFSET_WIDTH-1:0]  dcache_cpu_offset;
-    wire [ 3:0] dcache_cpu_wstrb;
+    wire [ 3:0] dcache_cpu_byte_enable;
     wire [31:0] dcache_cpu_wdata;
     wire        dcache_cpu_addr_ok;
     wire        dcache_cpu_data_ok;
@@ -583,7 +583,7 @@ module core_top (
         .dcache_cpu_op       (dcache_cpu_op),
         .dcache_cpu_index    (dcache_cpu_index),
         .dcache_cpu_offset   (dcache_cpu_offset),
-        .dcache_cpu_wstrb    (dcache_cpu_wstrb),
+        .dcache_cpu_byte_enable (dcache_cpu_byte_enable),
         .dcache_cpu_wdata    (dcache_cpu_wdata),
         .dcache_cpu_addr_ok  (dcache_cpu_addr_ok),
         .vtlb_enop           (vtlb_enop),
@@ -874,7 +874,7 @@ module core_top (
         .cpu_index     (dcache_cpu_index),
         .mmu_tag       (ex_tag),
         .cpu_offset    (dcache_cpu_offset),
-        .cpu_wstrb     (dcache_cpu_wstrb),
+        .cpu_byte_enable (dcache_cpu_byte_enable),
         .cpu_wdata     (dcache_cpu_wdata),
         .mmu_cache     (mmu_ex_cached),
         .mmu_cancel    (s1_cancel),

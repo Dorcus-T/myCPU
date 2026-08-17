@@ -11,7 +11,7 @@ module dcache (
     input  wire [`D_INDEX_WIDTH-1:0]  cpu_index,
     input  wire [19:0]                mmu_tag,         
     input  wire [`D_OFFSET_WIDTH-1:0] cpu_offset,
-    input  wire [ 3:0]                cpu_wstrb,
+    input  wire [ 3:0]                cpu_byte_enable,
     input  wire [31:0]                cpu_wdata,
     input  wire                       mmu_cache,
     input  wire                       mmu_cancel,
@@ -119,7 +119,7 @@ module dcache (
     reg                        req_op;
     reg  [`D_INDEX_WIDTH-1:0]  req_index;
     reg  [`D_OFFSET_WIDTH-1:0] req_offset;
-    reg  [31:0]                req_wstrb_mask;
+    reg  [ 3:0]                req_byte_enable;
     reg  [31:0]                req_wdata;
     reg                        req_preld;
     reg                        cacop_en_r;
@@ -144,7 +144,7 @@ module dcache (
     reg  [`D_WAY_NUM-1:0]      wb_way_hit;
     reg  [`D_INDEX_WIDTH-1:0]  wb_index;
     reg  [BANK_IDX_W-1:0]      wb_bank;
-    reg  [31:0]                wb_wstrb_mask;
+    reg  [ 3:0]                wb_byte_enable;
     reg  [31:0]                wb_wdata;
 
     // ============================================================
@@ -413,7 +413,7 @@ module dcache (
             req_op           <= 1'b0;
             req_index        <= {`D_INDEX_WIDTH{1'b0}};
             req_offset       <= {`D_OFFSET_WIDTH{1'b0}};
-            req_wstrb_mask   <= 32'd0;
+            req_byte_enable  <= 4'd0;
             req_wdata        <= 32'd0;
             req_preld        <= 1'b0;
             cacop_en_r       <= 1'b0;
@@ -425,8 +425,7 @@ module dcache (
             req_op           <= cpu_op;
             req_index        <= cpu_index;
             req_offset       <= cpu_offset;
-            req_wstrb_mask   <= { {8{cpu_wstrb[3]}}, {8{cpu_wstrb[2]}},
-                                  {8{cpu_wstrb[1]}}, {8{cpu_wstrb[0]}} };
+            req_byte_enable  <= cpu_byte_enable;
             req_wdata        <= cpu_wdata;
             req_preld        <= preld;
             cacop_en_r       <= cacop_en;
@@ -451,7 +450,7 @@ module dcache (
             wb_way_hit     <= way_hit;
             wb_index       <= req_index;
             wb_bank        <= req_offset[`D_OFFSET_WIDTH-1:2];
-            wb_wstrb_mask  <= req_wstrb_mask;
+            wb_byte_enable <= req_byte_enable;
             wb_wdata       <= req_wdata;
         end
     end
@@ -494,14 +493,18 @@ module dcache (
     // lookup返回数据
     wire [31:0] lookup_bank_data = bank_rdata[hit_way_idx][req_offset[`D_OFFSET_WIDTH-1:2]];
 
+    wire [31:0] wb_byte_mask  = {{8{wb_byte_enable[3]}}, {8{wb_byte_enable[2]}}, {8{wb_byte_enable[1]}}, {8{wb_byte_enable[0]}}};
+
     wire [31:0] lookup_rdata = ((main_lookup || main_relookup) && wb_write && !req_op && (wb_index == req_index) && wb_way_hit[hit_way_idx] && (wb_bank == req_offset[`D_OFFSET_WIDTH-1:2])) ?
-                               ((wb_wdata & wb_wstrb_mask) | (lookup_bank_data & ~wb_wstrb_mask)) : lookup_bank_data;
+                               ((wb_wdata & wb_byte_mask) | (lookup_bank_data & ~wb_byte_mask)) : lookup_bank_data;
 
     // REFILL 合并写数据
-    wire [3:0]  req_wstrb_4b = {req_wstrb_mask[31], req_wstrb_mask[23], req_wstrb_mask[15], req_wstrb_mask[7]};
-    wire        wstrb_hw = (req_wstrb_4b == 4'b0011) || (req_wstrb_4b == 4'b1100);
+    wire [31:0] req_byte_mask = {{8{req_byte_enable[3]}}, {8{req_byte_enable[2]}}, {8{req_byte_enable[1]}}, {8{req_byte_enable[0]}}};
+    
+    wire        req_byte_half = (req_byte_enable == 4'b0011) || (req_byte_enable == 4'b1100);
+    
     wire [31:0] refill_merged_word = (req_op && (refill_cnt == refill_offset[`D_OFFSET_WIDTH-1:2])) 
-                                     ? ((req_wdata & req_wstrb_mask) | (return_data & ~req_wstrb_mask)) 
+                                     ? ((req_wdata & req_byte_mask) | (return_data & ~req_byte_mask)) 
                                      : return_data;
    
     // 输出 FIFO
@@ -625,7 +628,7 @@ module dcache (
 
                 wire bank_en  = bank_wr_refill || bank_wr_hit || ram_read_en;
                 wire [ 3:0] bank_wen = bank_wr_refill ? 4'b1111 :
-                                       bank_wr_hit    ? {wb_wstrb_mask[24], wb_wstrb_mask[16], wb_wstrb_mask[ 8], wb_wstrb_mask[ 0]} :
+                                       bank_wr_hit    ? wb_byte_enable :
                                                         4'b0;
                 wire [`D_INDEX_WIDTH-1:0] bank_addr = bank_wr_refill ? refill_index :
                                                       bank_wr_hit    ? wb_index :
@@ -657,14 +660,10 @@ module dcache (
     // AXI读请求
     assign rd_req = main_waitrd;
 
-    // 非缓存读按访存宽度下发（arsize）：字节/半字/字，由请求 wstrb 推断
-    //（load 时 pre_mem 亦按 mem_size 生成 wstrb）。字节/半字读若按整字下发，
-    // 读 UART 偏移 1..3 的寄存器（IE/II/LC）会被对齐回 RB 字地址弹走接收
-    // FIFO；而整字读降为字节读又会丢高字节，故必须按真实宽度编码。
-    wire [1:0] rd_size_enc = (&req_wstrb_4b) ? 2'b10 :
-                             ((req_wstrb_4b == 4'b0011) || (req_wstrb_4b == 4'b1100)) ? 2'b01 :
-                             2'b00;
-    assign rd_type = refill_cached ? 3'b100 : {1'b0, rd_size_enc};
+    wire [1:0] rd_size = (&req_byte_enable) ? 2'b10 :
+                          req_byte_half     ? 2'b01 :
+                                              2'b00 ;
+    assign rd_type = refill_cached ? 3'b100 : {1'b0, rd_size};
 
     assign rd_addr = refill_cached ?
                     {refill_tag, refill_index, {`D_OFFSET_WIDTH{1'b0}}} :
@@ -673,16 +672,16 @@ module dcache (
     // AXI 写请求 — 仅 WAITWR 状态
     assign wr_req = main_waitwr && wr_needs_write;
 
-    assign wr_type = !is_uncached_store  ? 3'b100
-                     : (&req_wstrb_4b)   ? 3'b010
-                     : wstrb_hw          ? 3'b001
-                                         : 3'b000;
+    assign wr_type = !is_uncached_store   ? 3'b100
+                     : (&req_byte_enable) ? 3'b010
+                     : req_byte_half      ? 3'b001
+                                          : 3'b000;
 
     assign wr_addr = is_uncached_store ? {refill_tag, refill_index, refill_offset}
                    : cacop_en_r        ? {tagv_rdata[refill_replace_way][`D_TAG_WIDTH:1], cacop_index_r, {`D_OFFSET_WIDTH{1'b0}}} 
                    :{tagv_rdata[refill_replace_way][`D_TAG_WIDTH:1], refill_index, {`D_OFFSET_WIDTH{1'b0}}}; 
                      
-    assign wr_wstrb = !is_uncached_store ? 4'b1111 : req_wstrb_4b;
+    assign wr_wstrb = !is_uncached_store ? 4'b1111 : req_byte_enable;
 
     // 写回数据 — 整行 bank 拼接
     wire [32*BANK_NUM-1:0] wr_data_cached;
