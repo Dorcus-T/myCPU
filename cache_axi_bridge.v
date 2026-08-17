@@ -277,14 +277,17 @@ module cache_axi_bridge (
 
     assign arvalid = dc_rd_buf_win || ic_rd_buf_win;
     assign arid    = dc_rd_buf_win ? 4'd1 : 4'd0;
-    // AXI 字读地址须 4 字节对齐：非 burst 读对齐到字，避免非对齐地址被下游
-    // 按递增多读 3 字节命中副作用寄存器（如 UART RB 会弹走接收 FIFO）
-    wire [31:0] dc_axi_rd_addr = is_dc_rd_burst_buf ? dc_rd_buf_addr
-                                                     : {dc_rd_buf_addr[31:2], 2'b00};
-    wire [31:0] ic_axi_rd_addr = is_ic_rd_burst_buf ? ic_rd_buf_addr
-                                                     : {ic_rd_buf_addr[31:2], 2'b00};
+    // 非 burst 读保留字节地址，arsize 跟随 rd_type（000 字节 / 001 半字 /
+    // 010 字，由 dcache 按访存宽度编码；icache 取指恒为字）。
+    // 下游 APB 桥按 araddr 从该字节开始访问：若把地址强制字对齐，
+    // 读 UART 偏移 1..3 的寄存器（IE/II/LC）会先命中 RB 字地址，拆出的
+    // 4 次字节读中第一次即 RB，把接收 FIFO 弹走 —— 键盘输入因此丢失。
+    // 内存从端（sram bridge）忽略 arsize 恒按对齐字返回，数据布局不变。
+    wire [31:0] dc_axi_rd_addr = dc_rd_buf_addr;
+    wire [31:0] ic_axi_rd_addr = ic_rd_buf_addr;
     assign araddr  = dc_rd_buf_win ? dc_axi_rd_addr : ic_axi_rd_addr;
-    assign arsize  = 3'b010;
+    assign arsize  = dc_rd_buf_win ? (is_dc_rd_burst_buf ? 3'b010 : dc_rd_buf_type)
+                                   : (is_ic_rd_burst_buf ? 3'b010 : ic_rd_buf_type);
     assign arlen   = dc_rd_buf_win ? (is_dc_rd_burst_buf ? DC_BURST_LEN[7:0] : 8'h00)
                                     : (is_ic_rd_burst_buf  ? IC_BURST_LEN[7:0] : 8'h00);
 

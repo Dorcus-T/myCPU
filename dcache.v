@@ -669,7 +669,14 @@ module dcache (
     // AXI读请求
     assign rd_req = main_waitrd;
 
-    assign rd_type = refill_cached ? 3'b100 : 3'b010;
+    // 非缓存读按访存宽度下发（arsize）：字节/半字/字，由请求 wstrb 推断
+    //（load 时 pre_mem 亦按 mem_size 生成 wstrb）。字节/半字读若按整字下发，
+    // 读 UART 偏移 1..3 的寄存器（IE/II/LC）会被对齐回 RB 字地址弹走接收
+    // FIFO；而整字读降为字节读又会丢高字节，故必须按真实宽度编码。
+    wire [1:0] rd_size_enc = (&req_wstrb_4b) ? 2'b10 :
+                             ((req_wstrb_4b == 4'b0011) || (req_wstrb_4b == 4'b1100)) ? 2'b01 :
+                             2'b00;
+    assign rd_type = refill_cached ? 3'b100 : {1'b0, rd_size_enc};
 
     assign rd_addr = refill_cached ?
                     {refill_tag, refill_index, {`D_OFFSET_WIDTH{1'b0}}} :
