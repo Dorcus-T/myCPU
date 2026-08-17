@@ -56,10 +56,7 @@ module pre_mem_stage (
     // ── 分支预测器更新接口（输出 → branch_predict） ──
     output wire                     bp_update_en,
     output wire [`BP_BUS_WD-1:0]    bp_bus,
-    input  wire                     bp_valid,           // 上拍 pre_mem 准备+有效+无冲刷+下级空 → 本拍可更新
-    // ── debug 输出（ILA）──
-    output wire [31:0]              debug_pre_mem_pc,   // PRE_MEM 级 PC
-    output wire [31:0]              debug_alu_result    // ALU 计算结果（访存地址）
+    input  wire                     bp_valid            // 上拍 pre_mem 准备+有效+无冲刷+下级空 → 本拍可更新
 );
 
     wire pre_mem_valid;                                 // 本拍有效 = (ldata? valid_n : valid_o) & lvalid
@@ -418,9 +415,5 @@ module pre_mem_stage (
 
     // ========== result_or_badv（TLB异常时用PC替换地址） ==========
     assign result_or_badv = (!ex_exc[11] && |ex_exc[10:8]) ? pre_mem_pc : alu_result;
-
-    // ========== debug 输出（ILA） ==========
-    assign debug_pre_mem_pc = pre_mem_pc;
-    assign debug_alu_result = alu_result;
 
 endmodule

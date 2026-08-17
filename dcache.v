@@ -57,19 +57,7 @@ module dcache (
     output wire [31:0]                debug_perf_access_cnt,
     output wire [31:0]                debug_perf_miss_cnt,
     output wire [31:0]                debug_perf_real_miss_cnt,
-    output wire [31:0]                debug_perf_relookup_cnt,
-
-    // ILA debug 输出
-    output wire                       debug_mmu_cache,
-    output wire                       debug_req_op,
-    output wire [`D_OFFSET_WIDTH-1:0] debug_req_offset,
-    output wire [`D_TAG_WIDTH-1:0]    debug_refill_tag,
-    output wire [`D_OFFSET_WIDTH-1:0] debug_refill_offset,
-    output wire                       debug_dc_wr_req,
-    output wire [ 2:0]                debug_dc_wr_type,
-    output wire [31:0]                debug_dc_wr_addr,
-    output wire [ 3:0]                debug_dc_wr_wstrb,
-    output wire [32*`D_LINE_WORDS-1:0] debug_dc_wr_data
+    output wire [31:0]                debug_perf_relookup_cnt
 );
 
     // ============================================================
@@ -747,16 +735,6 @@ module dcache (
     assign debug_refill_cached = refill_cached;
     assign debug_refill_index  = refill_index;
     assign debug_req_index     = req_index;
-    assign debug_mmu_cache     = mmu_cache;
-    assign debug_req_op        = req_op;
-    assign debug_req_offset    = req_offset;
-    assign debug_refill_tag    = refill_tag;
-    assign debug_refill_offset = refill_offset;
-    assign debug_dc_wr_req     = wr_req;
-    assign debug_dc_wr_type    = wr_type;
-    assign debug_dc_wr_addr    = wr_addr;
-    assign debug_dc_wr_wstrb   = wr_wstrb;
-    assign debug_dc_wr_data    = wr_data;
 
     assign debug_perf_total_req     = perf_total_req;
     assign debug_perf_access_cnt    = perf_access_cnt;
