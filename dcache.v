@@ -587,7 +587,7 @@ module dcache (
             wire [ 3:0]  tagv_wen = tagv_wr ? tagv_wmask_sel : 4'b0;
             wire [`D_INDEX_WIDTH-1:0] tagv_addr = tagv_wr ? tagv_waddr_sel : ram_raddr;
 
-            cache_ram #(
+            sp_ram #(
                 .WIDTH (`D_TAG_WIDTH + 1),
                 .DEPTH (INDEX_DEPTH),
                 .ADDRW (`D_INDEX_WIDTH)
@@ -646,7 +646,7 @@ module dcache (
                                          bank_wr_hit    ? wb_wdata :
                                                           32'd0;
 
-                cache_ram #(
+                sp_ram #(
                     .WIDTH (32),
                     .DEPTH (INDEX_DEPTH),
                     .ADDRW (`D_INDEX_WIDTH)

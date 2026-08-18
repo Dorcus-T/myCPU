@@ -4,7 +4,7 @@
 //   - wen 固定 4 比特，显式字节 if 展开，工具直提 BRAM36
 //   - rdata 同步输出（读延迟一拍）
 // ============================================================================
-module cache_ram #(
+module sp_ram #(
     parameter WIDTH = 32,   // 有效数据位宽（≤ 32）
     parameter DEPTH = 256,  // 深度（条目数）
     parameter ADDRW = 8     // 地址位宽

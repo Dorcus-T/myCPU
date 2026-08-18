@@ -446,7 +446,7 @@ module icache (
             wire [ 3:0]  tagv_wen = tagv_wr ? tagv_wmask_sel : 4'b0;
             wire [`I_INDEX_WIDTH-1:0] tagv_addr = tagv_wr ? tagv_waddr_sel : ram_raddr;
 
-            cache_ram #(
+            sp_ram #(
                 .WIDTH (`I_TAG_WIDTH + 1),
                 .DEPTH (INDEX_DEPTH),
                 .ADDRW (`I_INDEX_WIDTH)
@@ -472,7 +472,7 @@ module icache (
                 wire [`I_INDEX_WIDTH-1:0] bank_addr  = bank_wr_refill ? req_index : ram_raddr;
                 wire [31:0] bank_wdata = bank_wr_refill ? ((refill_cnt == gb) ? return_data : refill_line[gb]) : 32'b0;
 
-                cache_ram #(
+                sp_ram #(
                     .WIDTH (32),
                     .DEPTH (INDEX_DEPTH),
                     .ADDRW (`I_INDEX_WIDTH)

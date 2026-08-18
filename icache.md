@@ -10,7 +10,7 @@
 | 偏移位宽 | 6 bit | `I_OFFSET_WIDTH = 6`，64 字节 cache line |
 | 每行 Bank 数 | 16 | 每 Bank 32-bit，16 Bank = 512-bit |
 | 替换策略 | 树状 PLRU | `I_WAY_NUM-1 = 1` bit/组 |
-| RAM 类型 | 单端口同步 | `cache_ram`（tagv + bank 共用，字节写使能），读延迟 1 拍 |
+| RAM 类型 | 单端口同步 | `sp_ram`（tagv + bank 共用，字节写使能），读延迟 1 拍 |
 | 读写 | 只读分配 | fetch miss 填 cache，无写回、无脏位 |
 
 **地址划分（32-bit 物理/虚地址）：**
@@ -26,7 +26,7 @@
 |  V (1b)  |  TAG (18b)  |  Data Bank0..15 (16×32b)  |
 ```
 
-tagv 条目 = `{TAG[18:1], V[0]}` 与数据都存储于 `cache_ram`。
+tagv 条目 = `{TAG[18:1], V[0]}` 与数据都存储于 `sp_ram`。
 
 ---
 
@@ -71,9 +71,9 @@ LOOKUP miss 拍锁存总线读上下文，REFILL 期间不变。
 
 ## 3. RAM 设计
 
-### 3.1 TagV 存储（cache_ram，字节写使能）
+### 3.1 TagV 存储（sp_ram，字节写使能）
 
-tagv 与数据 bank 共用同一个单端口 RAM 模块 `cache_ram`（4-bit 字节写使能，可推断 BRAM）。条目 = `{tag[TAG_WIDTH:1], V[0]}`，窄位宽由外部 pad 零至 32-bit 写入。
+tagv 与数据 bank 共用同一个单端口 RAM 模块 `sp_ram`（4-bit 字节写使能，可推断 BRAM）。条目 = `{tag[TAG_WIDTH:1], V[0]}`，窄位宽由外部 pad 零至 32-bit 写入。
 
 | 操作 | wmask 编码 | 效果 |
 |------|----------|------|
@@ -83,7 +83,7 @@ tagv 与数据 bank 共用同一个单端口 RAM 模块 `cache_ram`（4-bit 字�
 
 > 字节 0 同时含 V（bit 0）与 tag 低 7 位（bits[7:1]），字节使能无法只清 V 而保留 tag 低 7 位——V=0 后 tag 不参与比较，顺带清低 7 位无害。
 
-### 3.2 cache_ram（字节写使能）
+### 3.2 sp_ram（字节写使能）
 
 通用 32-bit 单端口 RAM（4-bit 字节写使能，BRAM 推断优化），数据 bank 使用。
 

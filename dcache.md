@@ -10,7 +10,7 @@
 | 偏移位宽 | 5 bit | `D_OFFSET_WIDTH = 5`，32 字节 cache line |
 | 每行 Bank 数 | 8 | 每 Bank 32-bit，8 Bank = 256-bit |
 | 替换策略 | 树状 PLRU | `D_WAY_NUM-1 = 1` bit/组 |
-| RAM 类型 | 单端口同步 | `cache_ram`（tagv + bank 共用，字节写使能）、寄存器阵列（d_ram） |
+| RAM 类型 | 单端口同步 | `sp_ram`（tagv + bank 共用，字节写使能）、寄存器阵列（d_ram） |
 | 读写 | 读分配 + 写回 + 写分配 | load miss 填 cache；store miss 先填再写；命中 store 经 WB 延迟写 |
 
 **地址划分（32-bit 物理/虚地址）：**
@@ -26,7 +26,7 @@
 |  V (1b)  |  TAG (17b)  |  D (1b)  |  Data Bank0..7 (8×32b)  |
 ```
 
-tagv 条目 = `{TAG[17:1], V[0]}`，存储于 `cache_ram`；D 位存于 `d_ram`（寄存器阵列）。
+tagv 条目 = `{TAG[17:1], V[0]}`，存储于 `sp_ram`；D 位存于 `d_ram`（寄存器阵列）。
 
 ---
 
@@ -96,9 +96,9 @@ store 只写一个 bank（`wb_bank`），但命中多路时所有命中路的同
 
 ## 3. RAM 设计
 
-### 3.1 TagV 存储（cache_ram，字节写使能）
+### 3.1 TagV 存储（sp_ram，字节写使能）
 
-tagv 与数据 bank 共用同一个单端口 RAM 模块 `cache_ram`（4-bit 字节写使能，可推断 BRAM）。条目 = `{tag[TAG_WIDTH:1], V[0]}`，窄位宽由外部 pad 零至 32-bit 写入。
+tagv 与数据 bank 共用同一个单端口 RAM 模块 `sp_ram`（4-bit 字节写使能，可推断 BRAM）。条目 = `{tag[TAG_WIDTH:1], V[0]}`，窄位宽由外部 pad 零至 32-bit 写入。
 
 | 操作 | wmask 编码 | 效果 |
 |------|----------|------|
@@ -108,7 +108,7 @@ tagv 与数据 bank 共用同一个单端口 RAM 模块 `cache_ram`（4-bit 字�
 
 > 字节 0 同时含 V（bit 0）与 tag 低 7 位（bits[7:1]），字节使能无法只清 V 而保留 tag 低 7 位——V=0 后 tag 不参与比较（`way_hit` 以 V 门控），顺带清低 7 位无害。
 
-### 3.2 cache_ram（字节写使能）
+### 3.2 sp_ram（字节写使能）
 
 通用 32-bit 单端口 RAM（4-bit 字节写使能，BRAM 推断优化），数据 bank 使用。
 
