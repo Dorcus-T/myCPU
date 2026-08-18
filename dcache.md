@@ -4,28 +4,29 @@
 
 | 参数 | 值 | 说明 |
 |------|-----|------|
-| 组相联 | 2-way | `WAY_NUM = 2` |
-| 索引位宽 | 8 bit | `INDEX_WIDTH = 8`，共 256 组 |
-| Tag 位宽 | 20 bit | `TAG_WIDTH = 20` |
-| 偏移位宽 | 4 bit | `OFFSET_WIDTH = 4`，16 字节 cache line |
-| 每行 Bank 数 | 4 | 每 Bank 32-bit，4 Bank = 128-bit |
-| 替换策略 | 树状 PLRU | WAY_NUM-1 = 1 bit/组 |
-| RAM 类型 | 单端口同步 | `tagv_ram`（按位写使能，tagv），`data_bank_ram`（bank），寄存器阵列（d_ram） |
-| 读写 | 读分配 + 写回 + 写分配 | load miss 填 cache，store miss 先填再写 |
-| Victim Cache | 4 项 FIFO | 仅存储干净行，可配置开关 `VC_EN` |
+| 组相联 | 2-way | `D_WAY_NUM = 2` |
+| 索引位宽 | 10 bit | `D_INDEX_WIDTH = 10`，共 1024 组 |
+| Tag 位宽 | 17 bit | `D_TAG_WIDTH = 17` |
+| 偏移位宽 | 5 bit | `D_OFFSET_WIDTH = 5`，32 字节 cache line |
+| 每行 Bank 数 | 8 | 每 Bank 32-bit，8 Bank = 256-bit |
+| 替换策略 | 树状 PLRU | `D_WAY_NUM-1 = 1` bit/组 |
+| RAM 类型 | 单端口同步 | `tagv_ram`（按位写使能）、`data_bank_ram`（bank）、寄存器阵列（d_ram） |
+| 读写 | 读分配 + 写回 + 写分配 | load miss 填 cache；store miss 先填再写；命中 store 经 WB 延迟写 |
 
-**地址划分（32-bit 虚地址）：**
+**地址划分（32-bit 物理/虚地址）：**
 
 ```
-|  TAG [31:12]  |  INDEX [11:4]  |  OFFSET [3:0]  |
-|    20 bit      |     8 bit      |     4 bit       |
+|  TAG [31:15]  |  INDEX [14:5]  |  OFFSET [4:0]  |
+|    17 bit      |    10 bit      |     5 bit       |
 ```
 
 **Cache 行结构（每 way × 每 index）：**
 
 ```
-|  V (1b)  |  TAG (20b)  |  D (1b)  |  Data Bank0 (32b)  |  Bank1 (32b)  |  Bank2 (32b)  |  Bank3 (32b)  |
+|  V (1b)  |  TAG (17b)  |  D (1b)  |  Data Bank0..7 (8×32b)  |
 ```
+
+tagv 条目 = `{TAG[17:1], V[0]}`，单独存储于 `tagv_ram`；D 位存于 `d_ram`（寄存器阵列）。
 
 ---
 
@@ -33,432 +34,305 @@
 
 ### 2.1 Request Buffer
 
-`accept_new_req` 时更新，LOOKUP 期间保持稳定。
+`accept_new_req` 时更新，miss 处理期间保持稳定。
 
 | 寄存器 | 位宽 | 说明 |
 |--------|------|------|
-| `req_d` | 1 | 0=load, 1=store |
-| `req_index` | 8 | 请求 index |
-| `req_tag` | 20 | 请求 tag |
-| `req_offset` | 4 | 请求 offset（选中哪个 Bank） |
-| `req_wstrb_mask` | 32 | 展开的字节写使能（每字节 8-bit 全 0/全 1） |
+| `req_op` | 1 | 0=load, 1=store |
+| `req_index` | 10 | 请求 index（别名时当拍修正，见 §5） |
+| `req_offset` | 5 | 请求 offset |
+| `req_byte_enable` | 4 | CPU 原始字节使能（每字节 1 bit） |
 | `req_wdata` | 32 | 请求写数据 |
-| `req_cached` | 1 | 是否 cached 访问 |
-| `cacop_en_r` | 1 | CACOP 使能（锁存） |
-| `cacop_code_r` | 5 | CACOP 操作码 |
-| `cacop_way_r` | 1 | CACOP 目标路号 |
-| `cacop_index_r` | 8 | CACOP 目标 index |
-| `cacop_is_index_r` | 1 | CACOP 是否 index 操作 |
-| `cacop_is_hit_r` | 1 | CACOP 是否 hit 操作 |
+| `req_preld` | 1 | 预取请求 |
 
-### 2.2 Refill Buffer
+### 2.2 CACOP Buffer
 
-**LOOKUP miss 拍一次性锁存，含写回握手管理和 VC 服务信息。** 整个 REFILL 期间不变（含 WAITRD）。替代了独立的 Writeback Buffer 和 VC 服务上下文。
+CACOP 上下文独立缓冲，`accept_new_req` 时与 Request Buffer 同拍锁存，miss 处理期间稳定。
 
 | 寄存器 | 位宽 | 说明 |
 |--------|------|------|
-| `refill_index` | 8 | 写回 index |
-| `refill_tag` | 20 | 新行 tag（`req_tag`） |
-| `refill_offset` | 4 | 原始请求的 offset（用于 `read_miss_done` 判断） |
-| `refill_cached` | 1 | 是否 cached |
-| `refill_d` | 1 | 原始请求的 op（同时作为 D 位） |
-| `refill_replace_way` | 1 | 替换目标路号（`replace_way` 锁存） |
-| `refill_cnt` | 2 | 已接收数据拍数（0..3） |
-| `refill_line[0:3]` | 4×32 | 新行拼装缓冲区 |
-| `refill_victim_line[0:3]` | 4×32 | victim 行 128-bit（含 `live_fwd` WB 前推） |
-| `refill_victim_tag` | 20 | victim 行 tag |
-| `refill_victim_valid` | 1 | victim 行 V 位 |
-| `refill_victim_dirty` | 1 | victim 行 D 位（含 `wb_line_dirty` 前推） |
-| `refill_wdata` | 32 | 锁存的 store wdata（供 REFILL/VC 合并用） |
-| `refill_wstrb_mask` | 32 | 锁存的 store wstrb_mask |
-| `refill_needs_write` | 1 | 有待发出的 AXI 写请求 |
-| `refill_wr_handshaked` | 1 | AXI 写握手已完成 |
-| `refill_vc_hit_idx` | VC_IDX_W | VC 命中条目号（仅 VC hit 时有效） |
+| `cacop_en_r` | 1 | CACOP 使能（REFILL 结束清零） |
+| `cacop_code_r` | 5 | CACOP 操作码（组合译码用 `[4:3]`） |
+| `cacop_way_r` | 1 | CACOP 目标路号（index 类操作） |
+| `cacop_index_r` | 10 | CACOP 目标 index（别名时当拍修正） |
 
-**加载时机**：`main_lookup && !cache_hit`（含 `vc_serve`、uncached、CACOP）。
+### 2.3 Refill Buffer
 
-此时 `bank_rdata` 还是 accept 拍读的数据（对应正确的 index），`live_fwd` / `victim_dirty` / `miss_needs_write` 组合逻辑有效。一次性锁存在 Refill Buffer 后，全部后续判断和 AXI 输出均从 Refill Buffer 推导（AXI 写输出在 LOOKUP 拍使用组合 live 数据，后续状态使用 Refill Buffer 快照）。
+LOOKUP miss 拍锁存总线读上下文，REFILL 期间不变。
 
-### 2.3 顶层标志
+| 寄存器 | 位宽 | 说明 |
+|--------|------|------|
+| `refill_tag` | 17 | 新行 tag（miss 拍 `lookup_tag` 快照） |
+| `refill_cached` | 1 | 是否 cached 访问 |
+| `refill_replace_way` | 1 | 替换路号（`replace_way` 快照） |
+| `refill_cnt` | 3 | 已接收数据拍数（0..7） |
+| `refill_line[0:7]` | 8×32 | 新行拼装缓冲区 |
+| `refill_way_hit_r` | 2 | miss 拍 `way_hit` 快照（hit 型 cacop 判定用） |
 
-无特殊顶层标志。
+> **注**：原设计中 Refill Buffer 内的 `refill_index`/`refill_offset`/`refill_mmu_tag` 已删除——miss 处理期间 `req_index`/`req_offset` 稳定（`accept_new_req` 不可能在 miss 状态发生），消费点直接使用 request buffer 值。
 
-### 2.4 Write Buffer（WB）
+### 2.4 命名问题（VIPT 别名）Buffer
+
+| 寄存器 | 位宽 | 说明 |
+|--------|------|------|
+| `mmu_index_cancel_r` | 1 | 普通请求别名标志（LOOKUP miss 拍锁存，RELOOKUP 拍清零） |
+| `mmu_index_cancel_cacop_r` | 1 | CACOP 别名标志（同上） |
+
+### 2.5 Write Buffer（WB）
 
 独立两状态 FSM（`WB_IDLE` / `WB_WRITE`），处理命中 store 的延迟写。
 
 | 寄存器 | 位宽 | 说明 |
 |--------|------|------|
-| `wb_valid` | 1 | WB 中有待写数据 |
-| `wb_way_hit` | WAY_NUM | store 命中的路位图 |
-| `wb_index` | 8 | store 目标 index |
-| `wb_bank` | 2 | store 目标 bank |
-| `wb_wstrb_mask` | 32 | 展开的写使能 |
+| `wb_way_hit` | 2 | store 命中的路位图 |
+| `wb_index` | 10 | store 目标 index |
+| `wb_bank` | 3 | store 目标 bank |
+| `wb_byte_enable` | 4 | 原始字节使能（bank RAM 写使能直接用） |
 | `wb_wdata` | 32 | 写数据 |
 
-WB 写入 bank RAM 时按 `wb_way_hit` 逐路写。store 只写一个 bank（`wb_bank`），但命中多路时所有命中路的同 bank 都更新。
-
-### 2.5 AXI 写请求（从 Refill Buffer 推导）
-
-不再有独立的 Writeback Buffer。`wr_req/type/addr/wstrb/data` 全部从 Refill Buffer 组合推导。
-
-**双路径设计**：LOADUP 拍使用组合 live 数据（`lookup_wr_bank` / `tagv_lookup` / `req_*`），确保 LOOKUP 当拍即可发起写握手；LOADUP 之后各状态使用 Refill Buffer 快照（`refill_victim_line` / `refill_victim_tag` / `refill_*`），数据稳定。
-
-| 输出 | LOOKUP 拍（live） | 后续状态（Refill Buffer 快照） |
-|------|-------------------|------------------------------|
-| `wr_req` | `main_lookup && miss_needs_write` | `refill_needs_write && !refill_wr_handshaked` |
-| `wr_type` | `req_cached \| cacop_en_r ? 3'b100 : uncached_rd_type` | `!refill_is_uncached_store ? 3'b100 : ...` |
-| `wr_addr` | burst:`{victim_tag, req_index, 4'd0}` / unc:`{req_tag, req_index, req_offset}` | burst:`{refill_victim_tag, refill_index, 4'd0}` / unc:`{refill_tag, refill_index, refill_offset}` |
-| `wr_wstrb` | burst:`4'b1111` / unc:`req_wstrb_4b` | burst:`4'b1111` / unc:`refill_wstrb_4b` |
-| `wr_data` | burst:`{lookup_wr_bank[3:0]}` / unc:`{96'd0, req_wdata}` | burst:`{refill_victim_line[3:0]}` / unc:`{96'd0, refill_wdata}` |
-
-`wr_req` 从 LOOKUP 拍起即拉高，贯穿 WAITRD → REFILL → WAITWR → WAITWB，后台独立推进。握手逻辑也在 LOOKUP 拍即可触发（`main_lookup && miss_needs_write && wr_rdy`），无需额外延迟。
-
-### 2.6 VC 服务信息（由 Refill Buffer 统一管理）
-
-不再有独立的 VC 服务上下文。VC hit + L1 miss 的信息统一存入 Refill Buffer（`refill_vc_hit_idx` / `refill_victim_valid` / `refill_victim_dirty`）。VC→L1 数据从 `vc_data[refill_vc_hit_idx]` 直接读（WAITWB 路径），或从 `vc_data[vc_hit_idx]` 组合读（LOADUP 当拍交换路径）。
+store 只写一个 bank（`wb_bank`），但命中多路时所有命中路的同 bank 都更新。
 
 ---
 
-## 3. 状态机
+## 3. RAM 设计
 
-### 3.1 双状态机
+### 3.1 tagv_ram（按位写使能）
 
-dcache 有两个独立状态机：
+单端口同步 RAM，条目 = `{tag[TAG_WIDTH:1], V[0]}`，写使能**按位**独立：
+
+| 操作 | wen 编码 | 效果 |
+|------|----------|------|
+| refill 填行 | `{tag 全 1, V=1}` | 写 `{refill_tag, 1'b1}` |
+| cacop 01/10（invalidate） | `{tag 全 0, V=1}` | 只清 V |
+| cacop 00（store-tag） | `{tag 全 1, V=0}` | 只写 tag，V 保留 |
+
+> 位级使能解决了字节使能下「V 与 tag 低 7 位共用字节 0」无法独立写的问题；代价是无法推断进 BRAM（BRAM 仅字节级 WE），实现为 LUTRAM——tag 阵列容量小，可接受。
+
+### 3.2 data_bank_ram（字节写使能）
+
+通用 32-bit 单端口 RAM（4-bit 字节写使能，BRAM 推断优化），数据 bank 使用。
+
+### 3.3 d_ram（D 位寄存器阵列）
+
+`reg [WAY-1:0][INDEX-1:0]` 寄存器阵列，与 tagv 同写使能（refill 填行时写 `req_op`，WB 命中写回时置 1）。
+
+---
+
+## 4. 状态机
+
+### 4.1 双状态机
 
 | 状态机 | 状态数 | 说明 |
 |--------|--------|------|
-| Main FSM | 6 | IDLE / LOOKUP / WAITRD / REFILL / WAITWR / WAITWB |
+| Main FSM | 8 | IDLE / LOOKUP / REREAD / WAITWR / WAIT_WR_DONE / WAITRD / REFILL / RELOOKUP |
 | WB FSM | 2 | WB_IDLE / WB_WRITE |
 
-### 3.2 Main FSM 状态编码
+### 4.2 状态编码
 
 ```
-IDLE (000001) → LOOKUP (000010) → WAITRD (000100) → REFILL (001000)
-                 ↘ WAITWR (010000)
-                 ↘ WAITWB (100000)
+IDLE(00000001) LOOKUP(00000010) REREAD(00000100) WAITWR(00001000)
+WAIT_WR_DONE(00010000) WAITRD(00100000) REFILL(01000000) RELOOKUP(10000000)
 ```
 
-### 3.3 状态跳转图
+### 4.3 状态跳转
 
 ```
-                        ┌──────────────────────────────────────────────┐
-                        │                                              │
-                        ▼                                              │
-        ┌──────┐  accept  ┌─────────┐  hit (ld/st)  ┌──────┐          │
-        │ IDLE │ ───────> │ LOOKUP  │ ────────────> │ IDLE │          │
-        └──────┘          └─────────┘               └──────┘          │
-            ▲           │  │  │  │  │                                │
-            │  miss+    │  │  │  │  │ vc_serve+wb_busy               │
-            │  rd_rdy   │  │  │  │  ▼                                │
-            │           │  │  │  ├─ WAITWB ──(!wb_write)──▶ IDLE/    │
-            │           │  │  │  │                        WAITWR     │
-            │  miss+    │  │  │  │                                    │
-            │  !rd_rdy  │  │  │  │                                    │
-            │           ▼  │  │  │                                    │
-            │      ┌──────┐ │  │  │                                    │
-            │      │WAITRD│ │  │  │                                    │
-            │      └──────┘ │  │  │                                    │
-            │         │     │  │  │  vc_serve+dirty /                 │
-            │      rd_rdy   │  │  │  uncached_store                   │
-            │         │     │  │  ▼                                    │
-            │         ▼     │  ├─ WAITWR ◄──────────────────────┐     │
-            │      ┌──────┐ │  │                                 │     │
-            │      │REFILL│─┘  │  │                              │     │
-            │      └──────┘    │  │                              │     │
-            │         │        │  │  vc_serve+clean              │     │
-            │    refill_last   │  │  / vc_serve+dirty+wr_rdy     │     │
-            │    wr未握手      │  │                              │     │
-            │         ▼        │  ▼                              │     │
-            │      ┌──────┐    ├─ IDLE ──────────────────────────┘     │
-            └──────│WAITWR│◄───┘                                      │
-                   └──────┘                                            │
+IDLE ──accept_new_req──▶ LOOKUP
+LOOKUP ──hit + accept──▶ LOOKUP（连续处理）
+LOOKUP ──别名 + wb_idle──▶ RELOOKUP（当拍重读，见 §5）
+LOOKUP ──别名 + wb_write──▶ REREAD（等 WB 空出 RAM 端口再读）
+LOOKUP ──cached miss / cacop──▶ REREAD
+LOOKUP ──uncached store──▶ WAITWR
+LOOKUP ──uncached load──▶ WAITRD（跳过 WAITWR，省 1 拍）
+RELOOKUP ──hit + accept──▶ LOOKUP（别名标志本拍清零）
+RELOOKUP ──miss──▶ REREAD / WAITWR / WAITRD
+REREAD ──别名标志──▶ RELOOKUP / 否则 WAITWR
+WAITWR ──uncached store + wr_rdy──▶ WAIT_WR_DONE
+WAITWR ──写回握手完成 + cacop──▶ REFILL
+WAITWR ──写回握手完成 + cached──▶ WAITRD
+WAIT_WR_DONE ──wr_done──▶ IDLE
+WAITRD ──rd_rdy──▶ REFILL
+REFILL ──refill_last / cacop_en_r──▶ IDLE
 ```
 
-### 3.4 各状态详述
+### 4.4 各状态详述
 
 #### IDLE
-
-- **进入**: 复位，或 LOOKUP/REFILL/WAITWR/WAITWB 无后续请求时
-- **退出**: `accept_new_req`（`idle_accept` → LOOKUP）
-- **RAM 动作**: `ram_read_en = 1`，读 tagv + bank + d_ram
-- **PLRU**: accept 时更新 `plru_victim_r`
-- **WB**: `wb_stall = wb_write && ram_read_en`，WB 被抢端口时暂缓
+- 进入：复位 / 各状态无后续请求
+- 退出：`accept_new_req` → LOOKUP
+- RAM 动作：`ram_read_en`，读 tagv + bank + d_ram
+- PLRU：accept 时锁存 `plru_victim_r`
 
 #### LOOKUP
+- tagv_rdata 有效：上一拍 `ram_read_en` 产生
+- 分支（优先级）：
+  1. 别名（`mmu_index_cancel[_cacop]`）+ `wb_idle` → RELOOKUP（当拍 `ram_raddr` 已用修正地址重读）
+  2. 别名 + `wb_write` → REREAD（WB 占用 RAM 写口，下拍再读）
+  3. `lookup_cancel`（`mmu_cancel && main_lookup`）→ IDLE（请求丢弃，CPU 重发）
+  4. cached miss / cacop → REREAD
+  5. uncached store miss → WAITWR
+  6. uncached load miss → WAITRD
+  7. hit + `accept_new_req` → LOOKUP
+  8. hit 无新请求 → IDLE
 
-- **进入**: 从 IDLE accept，或从 LOOKUP 自循环（连续 accept/hit），或从 REFILL early-accept
-- **tagv_rdata 有效**: 上一拍的 `ram_read_en` 在该拍产生 rdata
-- **分支**（按优先级）:
-  1. `vc_serve_wb_busy` → WAITWB（VC hit + WB 忙，等 WB 写完）
-  2. `vc_serve && !victim_dirty` → IDLE（VC→L1 + victim→VC 交换完成）
-  3. `vc_serve && victim_dirty && wr_rdy` → IDLE（VC→L1 + wr 当拍握手完成）
-  4. `vc_serve && victim_dirty && !wr_rdy` → WAITWR（VC→L1 + victim 写回内存，等握手）
-  5. `is_uncached_store` → WAITWR
-  6. `cacop_en_r` → REFILL
-  7. `!cache_hit && rd_rdy` → REFILL（miss + 总线就绪）
-  8. `!cache_hit && !rd_rdy` → WAITRD（miss + 等总线）
-  9. `accept_new_req` → LOOKUP 自循环
-  10. 否则 → IDLE
-- **data_ok**: `read_hit_done`（load 命中）、`vc_read_done`（VC 命中 load）、`write_done`（store）
-- **PLRU**: `plru_upd_en = main_lookup && cache_hit || refill_tagv_we`
-
-#### WAITRD
-
-- **进入**: LOOKUP miss 但 `rd_rdy = 0`
-- **退出**: `rd_rdy` → REFILL
-- **RAM 动作**: 无
-- **rd_req**: 保持为 1
-- **wr_req**: 如 `refill_needs_write` 已置位，持续拉高
-
-#### REFILL
-
-- **进入**: LOOKUP miss + rd_rdy，或 LOOKUP cacop，或 WAITRD + rd_rdy
-- **第 0–3 拍（return_valid）**: `refill_line[refill_cnt] <= refill_merged_word`，`refill_cnt++`
-- **`read_miss_done`**: `main_refill && return_valid && !refill_d && (refill_cnt == refill_offset[3:2] || !refill_cached)`
-- **`refill_last` 拍**:
-  - TagV + Bank RAM + d_ram 写回
-  - PLRU 更新（`refill_replace_way` 标 MRU）
-- **退出**:
-  - uncached / CACOP → IDLE
-  - `refill_needs_write && !refill_wr_handshaked` → WAITWR
-  - `refill_already_accept_new_req` → LOOKUP
-  - 否则 → IDLE
+#### REREAD
+- 进入：cached miss / cacop miss / 别名 + wb_write
+- 用途：以 `req_index`（别名时已修正）重读 victim 数据，保证写回数据不被 WB 写或新请求读污染；别名场景下同时为 RELOOKUP 提供物理索引的数据
+- `main_reread_relookup`（别名标志=1）→ RELOOKUP；否则 → WAITWR
 
 #### WAITWR
+- 双重用途：
+  - cached 写回（脏 victim）：`wr_needs_write = refill_cached && V && D`，发 `wr_req` 等 `wr_rdy` 握手
+  - uncached store：发写等 `wr_rdy` 握手后 → WAIT_WR_DONE 等 `wr_done`
+- 无写需求（干净 victim / uncached load 已跳过）时 1 拍通过
 
-双重用途——cached 写回等 `wr_rdy`，uncached store 等 `wr_done`。
+#### WAIT_WR_DONE
+- uncached store 专用，等 `wr_done`（写真正完成）后回 IDLE
+- cached 写回只需握手（`wr_rdy`），不等 `wr_done`
 
-- **进入**: LOOKUP miss dirty / VC serve dirty / uncached store / REFILL 后 wr 未握手
-- **退出**:
-  - `!refill_wr_handshaked` → 继续等握手
-  - `refill_is_uncached_store && !wr_done` → 等 `wr_done`
-  - 握手完成且（cached || `wr_done`）→ accept→LOOKUP 或 IDLE
-- **wr_req**: 持续拉高直到握手
-- **握手拍立即 accept**: 可以在同拍 `accept_new_req` → LOOKUP
+#### WAITRD
+- 发 `rd_req`（= `main_waitrd`），等 `rd_rdy` → REFILL
 
-#### WAITWB
+#### REFILL
+- 逐拍接收 `return_data` 拼装 `refill_line`；`refill_merged_word` 在命中拍与 `req_wdata` 按 `req_byte_enable` 合并（store miss 回填写数据）
+- `refill_last` 拍：tagv + bank + d_ram 写回，PLRU 更新
+- `refill_read_miss_done`：`return_valid && !req_op && (refill_cnt == req_offset[4:2] || !refill_cached)`
+- 退出：`refill_last || cacop_en_r` → IDLE
 
-VC hit + WB 忙时等待 WB 写完。
+#### RELOOKUP
+- 进入：别名后重查（wb_idle 当拍 / REREAD 之后）
+- 用物理索引读出的 tagv/bank 数据重新比对（`lookup_tag = refill_tag`）
+- 命中 → 完成；miss → 按 LOOKUP 分支继续（REREAD / WAITWR / WAITRD）
 
-- **进入**: `vc_serve_wb_busy = vc_serve && wb_write`
-- **停留**: `wb_write` → 等 WB 完成
-- **退出**（`!wb_write`）:
-  - `refill_victim_dirty && !refill_wr_handshaked` → WAITWR
-  - `accept_new_req` → LOOKUP
-  - 否则 → IDLE
-- **vc_exchange**: `main_waitwb && !wb_write` 拍触发 VC↔L1 交换
+### 4.5 隐式 IDLE（默认转移）
 
-### 3.5 WB FSM
+`main_next` 默认 = IDLE。依赖默认的情况均正确：
+- LOOKUP/RELOOKUP 遇 `lookup_cancel` → IDLE（请求丢弃）
+- LOOKUP/RELOOKUP 命中但无新请求 → IDLE
+- IDLE 无请求 → IDLE
 
-```
-WB_IDLE ──lookup_store_hit──▶ WB_WRITE
-WB_WRITE ──!wb_stall && !wb_new_store_hit──▶ WB_IDLE
-WB_WRITE ──wb_stall──▶ WB_WRITE（暂缓）
-WB_WRITE ──wb_new_store_hit──▶ WB_WRITE（新 store 命中，数据更新）
-```
-
-- **进入 WB_WRITE**: LOOKUP 命中 store → `wb_valid=1`，`wb_way_hit` / `wb_bank` / `wb_data` 锁存
-- **写入**: `wb_write && !ram_read_en` 时 `bank_wr_hit` 写 bank RAM + `d_ram <= 1`
-- **暂缓**: `wb_stall = wb_write && ram_read_en`，RAM 被新请求读抢走
-- **退出**: 非 stall 且无新 store 命中 → `wb_valid=0`
+> **注意**：`lookup_cancel` 目前只定义在 `main_lookup`（`mmu_cancel && main_lookup`）。RELOOKUP 期间 `mmu_cancel` 不生效（命中会完成数据返回、miss 会继续处理）——行为无害但语义不严格，如要严格丢弃需扩展定义。
 
 ---
 
-## 4. 特殊机制一：Hit Write 冲突
+## 5. VIPT 别名处理（命名问题）
 
-### 4.1 三种机制
+### 5.1 别名检测
 
-| 机制 | 信号 | 说明 |
-|------|------|------|
-| WB 暂缓 | `wb_stall = wb_write && ram_read_en` | WB 被新请求抢 RAM 端口，写入推迟 |
-| WB 前推 | `wb_fwd_active` / `wb_fwd_data` | LOOKUP 是 load 且 WB 有未写入的同 index/way/bank → 合成最新数据 |
-| 阻塞 accept | `hit_write_block` | LOOKUP st 命中 + WB 忙 + 新请求 → 阻塞，防止双 st 竞争 WB |
-
-### 4.2 WB 暂缓（`wb_stall`）
-
-RAM 是单端口，读（新请求 accept）优先。`ram_read_en` 当拍 `bank_wr_hit` 被门控（`&& !ram_read_en`），`d_ram` 写入同步暂缓（`&& !wb_stall`）。WB 状态机滞留 WB_WRITE，数据保持。
-
-### 4.3 WB 前推（`wb_fwd_active`）
-
-当前 LOOKUP 请求是 load，且 WB 有未写入的同 index、同 way、同 bank 数据。此时 `bank_rdata` 是旧的，`lookup_rdata` 用 `wb_wdata & wb_wstrb_mask` 与 `bank_rdata` 做字节合并。
-
-**同 cycle 的 store 前推**：LOOKUP store 命中 + 新 load 被 accept → 下拍新 ld 在 LOOKUP 时 `wb_fwd_active` 自然检测到 WB 有数据（因为上拍 `lookup_store_hit` 已锁存 WB）。
-
-### 4.4 脏位前推（`wb_line_dirty`）
-
-miss 时判断 `victim_dirty` 需要综合 WB 状态。如果 WB 正写同 index 同 way，`d_rdata` 可能还是 0（WB 被 stall 或尚未读回）。
+index 高位越界进页号（4KB 页，页内 12 bit）时，VA 索引与 PA 索引在高位不同：
 
 ```
-victim_dirty = (d_lookup[way] || wb_line_dirty[way]) && tagv_lookup[way][0]
+mmu_index_cancel        = main_lookup && !cacop_en_r && (req_index[9:7] != mmu_tag[2:0])
+mmu_index_cancel_cacop  = main_lookup && cacop_en_r && (code[4:3]==2'b10)
+                          && (cacop_index_r[9:7] != mmu_cacop_tag[2:0])
 ```
 
-`wb_line_dirty[way] = wb_write && (wb_index == req_index) && wb_way_hit[way]`
+（`12 - D_OFFSET_WIDTH = 7`，索引越界位为 `[9:7]`；mmu_tag 低 3 位 `[2:0]` 对应。）
+
+### 5.2 修正与重查
+
+- **当拍重读（wb_idle）**：`ram_raddr = index_cancel_addr = {mmu_tag 高位, index 低位}`——组合重建物理索引，当拍用修正地址重读 tagv/bank，下拍 RELOOKUP 比对
+- **修正锁存**：同一上升沿 `req_index`（或 `cacop_index_r`）被修正为物理索引（request buffer / cacop buffer 的 `mmu_index_cancel[_cacop]` 分支），后续所有消费点（rd_addr / wr_addr / tagv 写地址）直接用修正后的 `req_index`
+- **wb_write 时**：当拍无法重读（RAM 写口被占），进入 REREAD 拍读物理索引数据，再 RELOOKUP
+- **标志清除**：RELOOKUP 拍 `mmu_index_cancel_r[_cacop_r]` 清零
 
 ---
 
-## 5. 特殊机制二：Victim Cache
+## 6. 数据通路
 
-### 5.1 设计原则
-
-- VC 仅存储**干净行**（D=0）
-- 4 项深度，FIFO 替换
-- LOOKUP 直接命中：VC 不参与
-- LOOKUP miss + VC miss：标准 miss 流程，refill_last 拍干净 victim 写入 VC
-
-### 5.2 VC hit + L1 miss（`vc_serve`）
-
-此场景下 LOOKUP 拍需要：
-- VC 行数据通过 `vc_word` 返回 CPU（`vc_read_done`）
-- **VC→L1**：VC 行写入 L1（tagv + bank + d=req_d）
-- **L1→VC**（victim 干净）：victim 行写入 VC 同槽位
-- **L1→内存**（victim 脏）：victim 行数据已在 Refill Buffer 中（`refill_victim_line`）→ wr_req
-
-### 5.3 WB 忙时的 WAITWB 状态
-
-`vc_serve && wb_write` → 进入 WAITWB：
-- 等待 WB 写完 RAM
-- 期间 Refill Buffer / VC 上下文全部锁存，数据安全
-- WB 完成后 `vc_exchange` 拍执行 VC↔L1 交换
-- clean victim → IDLE；dirty victim → WAITWR
-
-### 5.4 VC 数据交换
-
-**VC→L1（总是执行）**：
-- LOOKUP 当拍：数据源 `vc_data[vc_hit_idx]` + 组合 `req_*`（live 数据）
-- WAITWB 末尾：数据源 `vc_data[refill_vc_hit_idx]` + Refill Buffer `refill_*`（快照）
-- tagv ← VC 行 tag + V=1
-- bank ← 128-bit VC data（store 时合并 `refill_wdata` / `req_wdata`）
-- d_ram ← `refill_d` / `req_d`（store=1 / load=0）
-
-**L1→VC（仅干净 victim）**：
-- LOOKUP 当拍：数据源 `lookup_wr_bank` + 组合 `req_*`（live 数据），写 `vc_data[vc_hit_idx]`
-- WAITWB 末尾：数据源 `refill_victim_line`（Refill Buffer 快照），写 `vc_data[refill_vc_hit_idx]`
-- `vc_addr[...]` ← `{refill_victim_tag, refill_index}` / `{tagv_lookup[replace_way][...], req_index}`
-
-### 5.5 VC insert（refill_last 拍）
-
-干净 victim 在 refill_last 拍写入 VC（全部从 Refill Buffer 取，不读 RAM 端口）：
-```
-vc_insert = refill_d_we && VC_EN
-         && refill_victim_valid
-         && !refill_victim_dirty;
-```
-数据从 `refill_victim_line` 取，tag 从 `refill_victim_tag` 取（LOOKUP miss 拍锁存，含 live_fwd WB 前推）。
-
----
-
-## 6. 发送访存请求的时机
-
-### 6.1 读请求
-
-| 状态 | 条件 |
-|------|------|
-| LOOKUP | `!cache_hit && need_bus_rd && !vc_hit` |
-| WAITRD | 持续拉高 |
-
-`rd_req = rd_req_lookup || main_waitrd`。cached miss 需要总线读，VC 命中不需要（数据从 VC 取）。
-
-### 6.2 写请求
-
-| 时机 | 说明 |
-|------|------|
-| LOOKUP miss + dirty | Refill Buffer 加载，`wr_req` 当拍拉高 |
-| LOOKUP uncached store | Refill Buffer 加载，`wr_req` 当拍拉高 |
-| REFILL 期间 | `wr_req` 后台持续拉高 |
-| WAITWR | `wr_req` 持续拉高直到握手 |
-
-`wr_req = (main_lookup && miss_needs_write) || (refill_needs_write && !refill_wr_handshaked)`。LOADUP 拍组合拉高，后续状态从 Refill Buffer 推导。cached 写回握手即完成，uncached store 需要等 `wr_done`。
-
-### 6.3 wr_req 窗口
+### 6.1 数据来源
 
 ```
-LOOKUP miss+dirty:
-  ┌─ LOOKUP ──┬─ WAITRD ──┬──── REFILL ────┬─ WAITWR ─┐
-  │ wr_req=1  │ wr_req=1  │   wr_req=1     │ wr_req=1 │
-  │           │           │                 │          │
-  └─ 握手? ───┴─ 握手? ───┴─── 握手? ───────┴── 握手 ──┘
+live_rdata =
+  1. lookup_read_hit_done  → lookup_rdata    （L1 命中：bank_rdata + WB 前推合并）
+  2. refill_read_miss_done → return_data     （miss：AXI 返回数据）
+  3. 其他                  → 0
 ```
 
-整个窗口持续尝试握手。REFILL 期间握手 → refill_last 直回 IDLE。全程未握手 → WAITWR。
+`lookup_rdata` 在 WB 有未写入的同 index/way/bank 数据时，用 `wb_wdata & wb_byte_mask` 与 `bank_rdata` 字节合并。
+
+### 6.2 字节使能展开
+
+request buffer 存 CPU 原始 4-bit `req_byte_enable`，消费点按需展开：
+
+```
+req_byte_mask = {8{be[3]}, 8{be[2]}, 8{be[1]}, 8{be[0]}}   // 32-bit 掩码（合并用）
+rd_size       = 字(1111) ? 10 : 半字(0011/1100) ? 01 : 00   // 读宽度编码
+```
+
+`wr_wstrb = req_byte_enable`（uncached store 透传原始使能），burst 写恒 `4'b1111`。
+
+### 6.3 输出 FIFO
+
+- 深度 4，解耦数据生产和 CPU 消费
+- `accept_ok = cpu_op || (fifo_cnt < 3) || (fifo_cnt == 3 && req_op)`：store 无条件接受
+- FIFO 空且数据就绪时数据直通（bypass）
 
 ---
 
 ## 7. uncached 访问
 
-- `req_cached = 0` 时：
-  - `way_hit` 强制为 0（`req_cached || cacop_en_r` 为 0）
-  - `cache_hit = 0`（必然 miss）
-  - LOOKUP 分支：
-    - uncached load → WAITRD → REFILL（等 `return_valid`）
-    - uncached store → WAITWR（等 `wr_rdy` + `wr_done`）
-  - REFILL 中不写 tagv/bank（`refill_cached = 0`）
-  - `read_miss_done` 在 `return_valid` 第一拍即就绪（`|| !refill_cached`）
-  - AXI `rd_addr` 使用 offset 精确地址
-  - REFILL 退化为 IDLE
+| 类型 | 路径 | 说明 |
+|------|------|------|
+| uncached load | LOOKUP → **WAITRD** → REFILL | 跳过 WAITWR（原为空泡拍）；`rd_addr` 用 `{refill_tag, req_index, req_offset}` 精确地址，`rd_type` 按访存宽度编码（字 010 / 半字 001 / 字节 000） |
+| uncached store | LOOKUP → WAITWR → WAIT_WR_DONE → IDLE | 发写等 `wr_rdy` 握手 + `wr_done` 完成 |
+
+- REFILL 中不写 tagv/bank（`refill_cached = 0`）
+- `refill_read_miss_done` 在 `return_valid` 第一拍即就绪（`|| !refill_cached`）
+- 非缓存读宽度必须按真实访存宽度下发：若整字读降为字节读会丢高字节；字节/半字读若按整字下发，读 UART 偏移 1..3 的寄存器会被对齐回 RB 字地址弹走接收 FIFO
 
 ---
 
 ## 8. CACOP 处理
 
-### 8.1 操作码
+### 8.1 操作码（`code[4:3]`）
 
-| code[4:3] | 类型 | 说明 |
-|-----------|------|------|
-| 00 | Index Invalidate | 指定 index 的指定路 V←0 |
-| 01 | Index Store Tag | 指定 index 的指定路写入 tag |
-| 10 | Hit Invalidate | 命中路 V←0 |
-| 11 | — | 预留 |
+| code[4:3] | 类型 | wen 编码 | 效果 |
+|-----------|------|----------|------|
+| 00 | store-tag | `{tag 全 1, V=0}` | 只写 tag（清 0），V 保留 |
+| 01 | index 类失效 | `{tag 全 0, V=1}` | 只清 V（index 指定路） |
+| 10 | hit 失效 | `{tag 全 0, V=1}` | 只清 V（命中路，`refill_tagv_we` 需 `\|refill_way_hit_r`） |
+| 11 | — | — | 未处理（无分支） |
+
+> **注意**：00 的语义（只写 tag 保 V）是近期从「tag+V 全清」改过来的，需与软件确认实际用法（若软件用 00 做全 cache 清无效，旧 V 会残留）。`wr_needs_write` 中 00/01 都会触发写回，若 00 确为 store-tag 语义，该分支待确认。
 
 ### 8.2 流程
 
 ```
 accept_new_req (cacop_en=1)
-  → Request Buffer 锁存 cacop 上下文
-  → LOOKUP（读 tagv，cache_hit=0）
-  → 直接进 REFILL（无总线读请求）
-  → REFILL 中 cacop_en_r 触发 tagv 写
-  → 若有脏行需写回 → Refill Buffer 加载写回信息，wr 后台
-  → cacop_en_r ← 0，FSM → IDLE
+  → CACOP Buffer 锁存上下文
+  → LOOKUP（读 tagv，cache_hit 被 !cacop_en_r 屏蔽）
+  → 别名 → RELOOKUP / REREAD；否则 REREAD → WAITWR → REFILL（无总线读）
+  → REFILL 中 cacop_en_r 触发 tagv 按位写
+  → 若有脏行需写回（wr_needs_write）→ WAITWR 发写
+  → cacop_en_r ← 0（REFILL 拍），FSM → IDLE
 ```
 
-- CACOP 不产生 `cpu_data_ok`（`cache_hit = 0`）
-- CACOP REFILL 不接受提前 accept（`!cacop_en_r` 条件）
-- CACOP 的替换路：code=10(hit) 用 `hit_way_idx`，否则用 `cacop_way_r`
+- CACOP 不产生 `cpu_data_ok`
+- 替换路：code=10 用 `hit_way_idx`，否则用 `cacop_way_r`
 
 ---
 
-## 9. 数据通路
-
-### 9.1 数据来源
+## 9. 写回机制
 
 ```
-live_rdata =
-  1. read_hit_done  → lookup_rdata   (L1 命中: bank_rdata + wb_fwd)
-  2. vc_read_done   → vc_word        (VC 命中: VC 数据)
-  3. read_miss_done → return_data    (miss: AXI 返回数据)
-  4. 其他           → 0
+wr_needs_write = cacop_en_r ? (00 || 01 || (10 && |refill_way_hit_r)) && V && D
+                            : (refill_cached && V && D) || is_uncached_store
 ```
 
-所有数据源统一通过 `live_data_ready → FIFO → cpu_data_ok + cpu_rdata`。
-
-### 9.2 输出 FIFO
-
-- 深度 4，解耦数据生产和 CPU 消费
-- `accept_ok`：store 无条件接受；load 需 FIFO 有空位（`< 3` 或 `==3 && req_d` 即当前是 store 产生 write_done 不占 FIFO）
-- FIFO 空且数据就绪时，数据直通（bypass FIFO）
+- cached 脏 victim 写回：WAITWR 等 `wr_rdy` 握手（数据 `wr_data_cached` 从 `bank_rdata[refill_replace_way]` 整行拼装）
+- uncached store：等 `wr_rdy` + `wr_done`
+- `wr_type`/`wr_wstrb`/`wr_addr` 从 refill/request buffer 组合推导
 
 ---
 
 ## 10. PLRU 替换算法
 
-与 icache 一致。2-way 时 1 bit/组 × 256 组。
+2-way 时 1 bit/组 × 1024 组。
 
-**两阶段**：
-- Accept 拍：组合遍历 → `plru_victim_pre` → `plru_victim_r`（锁存）
-- LOOKUP 拍：`replace_way = cacop_en_r ? cacop_way/hit_way : (has_invalid ? invalid_way : plru_victim_r)`
-
-**更新**：命中或 `refill_tagv_we` 时标 MRU。
+- **Accept 拍**：组合遍历 → `plru_victim_pre` → `plru_victim_r`（锁存）
+- **LOOKUP 拍**：`replace_way = cacop_en_r ? (10 ? hit_way_idx : cacop_way_r) : (has_invalid ? invalid_way : plru_victim_r)`
+- **更新**：命中或 `refill_tagv_we` 时标 MRU（`plru_upd_index = cacop_en_r ? cacop_index_r : req_index`）
 
 ---
 
@@ -466,13 +340,11 @@ live_rdata =
 
 | 计数器 | 说明 |
 |--------|------|
-| `perf_total_req` | 总 accept 次数 |
+| `perf_total_req` | 总 accept 次数（不含 cacop） |
 | `perf_access_cnt` | cached 访问进入 LOOKUP 的次数（不含 cacop） |
 | `perf_miss_cnt` | cached miss 次数 |
-| `perf_real_miss_cnt` | 实际 miss（不含 VC 命中） |
-| `perf_vc_hit_cnt` | VC 命中次数 |
-| `perf_vc_insert_cnt` | VC 插入次数（refill_last 干净 victim） |
-| `perf_vc_fill_cnt` | VC 交换次数（vc_serve 干净 victim） |
+| `perf_real_miss_cnt` | 真实 miss |
+| `perf_relookup_cnt` | 别名重查次数 |
 
 ---
 
@@ -481,12 +353,12 @@ live_rdata =
 | 前缀 | 含义 |
 |------|------|
 | `req_*` | Request Buffer |
-| `refill_*` | Refill Buffer |
-| `cpu_*` | CPU 接口 |
 | `cacop_*` | CACOP 接口/上下文 |
+| `refill_*` | Refill Buffer |
+| `mmu_index_cancel*` | 别名检测/缓冲 |
 | `wb_*` | Write Buffer |
-| `wr_*` | AXI 写接口（数据从 Refill Buffer 组合推导） |
-| `vc_*` | Victim Cache |
+| `wr_*` | AXI 写接口 |
+| `cpu_*` | CPU 接口 |
 | `plru_*` | PLRU 替换算法 |
 | `perf_*` | 性能计数器 |
 
@@ -494,18 +366,12 @@ live_rdata =
 
 | 信号 | 推导 |
 |------|------|
-| `accept_new_req` | `(idle_accept \| hit_accept \| (WAITWR+done+req)) && accept_ok` |
-| `ram_read_en` | `accept_new_req` |
-| `refill_last` | `main_refill && return_valid && return_last` |
-| `cache_hit` | `(\|way_hit) && !cacop_en_r` |
-| `vc_serve` | `main_lookup && !cache_hit && vc_hit` |
-| `vc_exchange_lookup` | `main_lookup && vc_serve && !wb_write` |
-| `vc_exchange_waitwb` | `main_waitwb && !wb_write` |
-| `wr_req` | `(main_lookup && miss_needs_write) \| (refill_needs_write && !refill_wr_handshaked)` |
-| `miss_needs_write` | `cacop ? (cacop_wb && cacop_dirty) : ((req_cached && victim_dirty) \| is_uncached_store)` |
-| `hit_write_block` | `wb_write && cpu_req && main_lookup && cache_hit && req_d` |
-| `wb_stall` | `wb_write && ram_read_en` |
-| `wb_fwd_active` | `main_lookup && wb_write && !req_d && 同 index/way/bank` |
-| `read_result_ready` | `read_hit_done \| vc_read_done \| read_miss_done` |
+| `accept_new_req` | `accept_ok && (cpu_req \| cacop_en) && (IDLE \| (LOOKUP/RELOOKUP && cache_hit)) && !(wb_write 冲突)` |
+| `cache_hit` | `(\|way_hit) && lookup_cache && !cacop_en_r && !lookup_cancel && !别名` |
+| `lookup_cancel` | `mmu_cancel && main_lookup` |
+| `rd_type` | `refill_cached ? 100 : {0, rd_size}` |
+| `rd_addr` | cached:`{refill_tag, req_index, 5'd0}` / unc:`{refill_tag, req_index, req_offset}` |
+| `wr_req` | `main_waitwr && wr_needs_write` |
+| `wr_addr` | unc:`{refill_tag, req_index, req_offset}` / cacop:`{tagv高位, cacop_index_r, 0}` / burst:`{tagv高位, req_index, 0}` |
 | `cpu_addr_ok` | `accept_new_req && !cacop_en` |
-| `cpu_data_ok` | `read_result_ready \| !cpu_fifo_empty \| write_done` |
+| `cpu_data_ok` | `lookup_read_hit_done \| refill_read_miss_done \| !fifo_empty \| lookup_write_done \| lookup_preld_done` |
