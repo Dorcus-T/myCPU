@@ -67,6 +67,7 @@ module dcache (
     localparam BANK_IDX_W  = $clog2(BANK_NUM);
     localparam WAY_IDX_W   = $clog2(`D_WAY_NUM);
     localparam PLRU_W      = `D_WAY_NUM - 1;
+    localparam TAGV_BYTES  = (`D_TAG_WIDTH + 1 + 7) / 8;
     localparam MMU_TAG_WD  = 20;
 
     localparam MAIN_IDLE         = 8'b00000001;
@@ -575,29 +576,27 @@ module dcache (
     // TagV相关逻辑
     wire                      refill_tagv_we = main_refill && ((return_valid && return_last && refill_cached) || (cacop_en_r && ((cacop_code_r[4:3] == 2'b00)|| (cacop_code_r[4:3] == 2'b01) || ((cacop_code_r[4:3] == 2'b10) && (|refill_way_hit_r)))));
     wire [`D_INDEX_WIDTH-1:0] tagv_waddr_sel = cacop_en_r ? cacop_index_r : req_index;
-    wire [`D_TAG_WIDTH:0]     tagv_wen_sel   = cacop_en_r ? ((cacop_code_r[4:3] == 2'b00) ? {{(`D_TAG_WIDTH){1'b1}}, {1'b0}}
-                                                                                          : {{(`D_TAG_WIDTH){1'b0}}, {1'b1}}) 
-                                                                                          : {{(`D_TAG_WIDTH){1'b1}}, {1'b1}};
+    wire [ 3:0]               tagv_wmask_sel = (cacop_en_r && (cacop_code_r[4:3] == 2'b01 || cacop_code_r[4:3] == 2'b10)) ? 4'b0001 : {TAGV_BYTES{1'b1}};
     wire [`D_TAG_WIDTH:0]     tagv_wdata_sel = cacop_en_r ? {(`D_TAG_WIDTH+1){1'b0}} : {refill_tag, 1'b1};
 
     genvar gt;
     generate
         for (gt = 0; gt < `D_WAY_NUM; gt = gt + 1) begin : tagv_ram_gen
-            wire                  tagv_wr  = (refill_tagv_we && (refill_replace_way == gt));
-            wire                  tagv_en  = tagv_wr || ram_read_en;
-            wire [`D_TAG_WIDTH:0] tagv_wen = tagv_wr ? tagv_wen_sel : {(`D_TAG_WIDTH+1){1'b0}};
+            wire         tagv_wr  = (refill_tagv_we && (refill_replace_way == gt));
+            wire         tagv_en  = tagv_wr || ram_read_en;
+            wire [ 3:0]  tagv_wen = tagv_wr ? tagv_wmask_sel : 4'b0;
             wire [`D_INDEX_WIDTH-1:0] tagv_addr = tagv_wr ? tagv_waddr_sel : ram_raddr;
 
-            tagv_ram #(
-                .TAG_WIDTH (`D_TAG_WIDTH),
-                .DEPTH     (INDEX_DEPTH),
-                .ADDRW     (`D_INDEX_WIDTH)
+            cache_ram #(
+                .WIDTH (`D_TAG_WIDTH + 1),
+                .DEPTH (INDEX_DEPTH),
+                .ADDRW (`D_INDEX_WIDTH)
             ) u_tagv_ram (
                 .clk   (clk),
                 .en    (tagv_en),
                 .wen   (tagv_wen),
                 .addr  (tagv_addr),
-                .wdata (tagv_wdata_sel),
+                .wdata ({ {32-(`D_TAG_WIDTH+1){1'b0}}, tagv_wdata_sel }),
                 .rdata (tagv_rdata[gt])
             );
         end
@@ -647,7 +646,7 @@ module dcache (
                                          bank_wr_hit    ? wb_wdata :
                                                           32'd0;
 
-                data_bank_ram #(
+                cache_ram #(
                     .WIDTH (32),
                     .DEPTH (INDEX_DEPTH),
                     .ADDRW (`D_INDEX_WIDTH)

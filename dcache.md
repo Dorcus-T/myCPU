@@ -10,7 +10,7 @@
 | 偏移位宽 | 5 bit | `D_OFFSET_WIDTH = 5`，32 字节 cache line |
 | 每行 Bank 数 | 8 | 每 Bank 32-bit，8 Bank = 256-bit |
 | 替换策略 | 树状 PLRU | `D_WAY_NUM-1 = 1` bit/组 |
-| RAM 类型 | 单端口同步 | `tagv_ram`（按位写使能）、`data_bank_ram`（bank）、寄存器阵列（d_ram） |
+| RAM 类型 | 单端口同步 | `cache_ram`（tagv + bank 共用，字节写使能）、寄存器阵列（d_ram） |
 | 读写 | 读分配 + 写回 + 写分配 | load miss 填 cache；store miss 先填再写；命中 store 经 WB 延迟写 |
 
 **地址划分（32-bit 物理/虚地址）：**
@@ -26,7 +26,7 @@
 |  V (1b)  |  TAG (17b)  |  D (1b)  |  Data Bank0..7 (8×32b)  |
 ```
 
-tagv 条目 = `{TAG[17:1], V[0]}`，单独存储于 `tagv_ram`；D 位存于 `d_ram`（寄存器阵列）。
+tagv 条目 = `{TAG[17:1], V[0]}`，存储于 `cache_ram`；D 位存于 `d_ram`（寄存器阵列）。
 
 ---
 
@@ -96,19 +96,19 @@ store 只写一个 bank（`wb_bank`），但命中多路时所有命中路的同
 
 ## 3. RAM 设计
 
-### 3.1 tagv_ram（按位写使能）
+### 3.1 TagV 存储（cache_ram，字节写使能）
 
-单端口同步 RAM，条目 = `{tag[TAG_WIDTH:1], V[0]}`，写使能**按位**独立：
+tagv 与数据 bank 共用同一个单端口 RAM 模块 `cache_ram`（4-bit 字节写使能，可推断 BRAM）。条目 = `{tag[TAG_WIDTH:1], V[0]}`，窄位宽由外部 pad 零至 32-bit 写入。
 
-| 操作 | wen 编码 | 效果 |
+| 操作 | wmask 编码 | 效果 |
 |------|----------|------|
-| refill 填行 | `{tag 全 1, V=1}` | 写 `{refill_tag, 1'b1}` |
-| cacop 01/10（invalidate） | `{tag 全 0, V=1}` | 只清 V |
-| cacop 00（store-tag） | `{tag 全 1, V=0}` | 只写 tag，V 保留 |
+| refill 填行 | `{TAGV_BYTES{1'b1}}` | 写 `{refill_tag, 1'b1}`（tag + V 全写） |
+| cacop 01/10（invalidate） | `4'b0001` | 只写字节 0：V 清 0（tag 低 7 位顺带清 0） |
+| cacop 00 | `{TAGV_BYTES{1'b1}}` | tag + V 全清 |
 
-> 位级使能解决了字节使能下「V 与 tag 低 7 位共用字节 0」无法独立写的问题；代价是无法推断进 BRAM（BRAM 仅字节级 WE），实现为 LUTRAM——tag 阵列容量小，可接受。
+> 字节 0 同时含 V（bit 0）与 tag 低 7 位（bits[7:1]），字节使能无法只清 V 而保留 tag 低 7 位——V=0 后 tag 不参与比较（`way_hit` 以 V 门控），顺带清低 7 位无害。
 
-### 3.2 data_bank_ram（字节写使能）
+### 3.2 cache_ram（字节写使能）
 
 通用 32-bit 单端口 RAM（4-bit 字节写使能，BRAM 推断优化），数据 bank 使用。
 
@@ -287,14 +287,12 @@ rd_size       = 字(1111) ? 10 : 半字(0011/1100) ? 01 : 00   // 读宽度编�
 
 ### 8.1 操作码（`code[4:3]`）
 
-| code[4:3] | 类型 | wen 编码 | 效果 |
+| code[4:3] | 类型 | wmask 编码 | 效果 |
 |-----------|------|----------|------|
-| 00 | store-tag | `{tag 全 1, V=0}` | 只写 tag（清 0），V 保留 |
-| 01 | index 类失效 | `{tag 全 0, V=1}` | 只清 V（index 指定路） |
-| 10 | hit 失效 | `{tag 全 0, V=1}` | 只清 V（命中路，`refill_tagv_we` 需 `\|refill_way_hit_r`） |
+| 00 | index 类 | `{TAGV_BYTES{1'b1}}` | tag + V 全清 |
+| 01 | index 类 | `4'b0001` | 写字节 0：V 清 0（tag 低 7 位顺带清） |
+| 10 | hit 失效 | `4'b0001` | 同上（`refill_tagv_we` 需 `\|refill_way_hit_r`） |
 | 11 | — | — | 未处理（无分支） |
-
-> **注意**：00 的语义（只写 tag 保 V）是近期从「tag+V 全清」改过来的，需与软件确认实际用法（若软件用 00 做全 cache 清无效，旧 V 会残留）。`wr_needs_write` 中 00/01 都会触发写回，若 00 确为 store-tag 语义，该分支待确认。
 
 ### 8.2 流程
 
@@ -303,7 +301,7 @@ accept_new_req (cacop_en=1)
   → CACOP Buffer 锁存上下文
   → LOOKUP（读 tagv，cache_hit 被 !cacop_en_r 屏蔽）
   → 别名 → RELOOKUP / REREAD；否则 REREAD → WAITWR → REFILL（无总线读）
-  → REFILL 中 cacop_en_r 触发 tagv 按位写
+  → REFILL 中 cacop_en_r 触发 tagv 字节写
   → 若有脏行需写回（wr_needs_write）→ WAITWR 发写
   → cacop_en_r ← 0（REFILL 拍），FSM → IDLE
 ```
