@@ -59,7 +59,6 @@ module icache (
     localparam BANK_IDX_W  = $clog2(BANK_NUM);
     localparam WAY_IDX_W   = $clog2(`I_WAY_NUM);
     localparam PLRU_W      = `I_WAY_NUM - 1;
-    localparam TAGV_BYTES  = (`I_TAG_WIDTH + 1 + 7) / 8;
     localparam MMU_TAG_WD  = 20;   // MMU 输出物理 tag = paddr[31:12] 固定 20 位
 
     localparam MAIN_IDLE     = 5'b00001;
@@ -435,27 +434,31 @@ module icache (
     // TagV相关逻辑
     wire                      refill_tagv_we = main_refill && ((return_valid && return_last && refill_cached) || (cacop_en_r && ((cacop_code_r[4:3] == 2'b00) || (cacop_code_r[4:3] == 2'b01) || ((cacop_code_r[4:3] == 2'b10) && (|refill_way_hit_r)))));
     wire [`I_INDEX_WIDTH-1:0] tagv_waddr_sel = cacop_en_r ? cacop_index_r : refill_index;
-    wire [ 3:0]               tagv_wmask_sel = (cacop_en_r && (cacop_code_r[4:3] == 2'b01 || cacop_code_r[4:3] == 2'b10)) ? 4'b0001 : {TAGV_BYTES{1'b1}};
-    wire [`I_TAG_WIDTH:0]     tagv_wdata_sel = cacop_en_r ? { (`I_TAG_WIDTH+1){1'b0} } : {refill_tag, 1'b1};
+    // 按位写使能 [TAG:1]=tag, [0]=V：cacop 00 只写 tag（保 V）；01/10 只清 V；refill 全写
+    wire [`I_TAG_WIDTH:0]     tagv_wen_sel = cacop_en_r
+                                           ? ((cacop_code_r[4:3] == 2'b00) ? { {(`I_TAG_WIDTH){1'b1}}, {1'b0} }
+                                                                          : { {(`I_TAG_WIDTH){1'b0}}, {1'b1} })
+                                           : { {(`I_TAG_WIDTH){1'b1}}, {1'b1} };
+    wire [`I_TAG_WIDTH:0]     tagv_wdata_sel = cacop_en_r ? {(`I_TAG_WIDTH+1){1'b0}} : {refill_tag, 1'b1};
 
     genvar gt;
     generate
         for (gt = 0; gt < `I_WAY_NUM; gt = gt + 1) begin : tagv_ram_gen
-            wire         tagv_wr = refill_tagv_we && (refill_replace_way == gt);
-            wire         tagv_en   = tagv_wr || ram_read_en;
-            wire [ 3:0]  tagv_wen  = tagv_wr ? tagv_wmask_sel : 4'b0;
+            wire                  tagv_wr  = refill_tagv_we && (refill_replace_way == gt);
+            wire                  tagv_en  = tagv_wr || ram_read_en;
+            wire [`I_TAG_WIDTH:0] tagv_wen = tagv_wr ? tagv_wen_sel : {(`I_TAG_WIDTH+1){1'b0}};
             wire [`I_INDEX_WIDTH-1:0] tagv_addr = tagv_wr ? tagv_waddr_sel : ram_raddr;
 
-            sp_ram #(
-                .WIDTH (`I_TAG_WIDTH + 1),
-                .DEPTH (INDEX_DEPTH),
-                .ADDRW (`I_INDEX_WIDTH)
+            tagv_ram #(
+                .TAG_WIDTH (`I_TAG_WIDTH),
+                .DEPTH     (INDEX_DEPTH),
+                .ADDRW     (`I_INDEX_WIDTH)
             ) u_tagv_ram (
                 .clk   (clk),
                 .en    (tagv_en),
                 .wen   (tagv_wen),
                 .addr  (tagv_addr),
-                .wdata ({ {32-(`I_TAG_WIDTH+1){1'b0}}, tagv_wdata_sel }),
+                .wdata (tagv_wdata_sel),
                 .rdata (tagv_rdata[gt])
             );
         end
@@ -472,7 +475,7 @@ module icache (
                 wire [`I_INDEX_WIDTH-1:0] bank_addr  = bank_wr_refill ? refill_index : ram_raddr;
                 wire [31:0] bank_wdata = bank_wr_refill ? ((refill_cnt == gb) ? return_data : refill_line[gb]) : 32'b0;
 
-                sp_ram #(
+                data_bank_ram #(
                     .WIDTH (32),
                     .DEPTH (INDEX_DEPTH),
                     .ADDRW (`I_INDEX_WIDTH)

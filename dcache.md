@@ -10,7 +10,7 @@
 | 偏移位宽 | 4 bit | `OFFSET_WIDTH = 4`，16 字节 cache line |
 | 每行 Bank 数 | 4 | 每 Bank 32-bit，4 Bank = 128-bit |
 | 替换策略 | 树状 PLRU | WAY_NUM-1 = 1 bit/组 |
-| RAM 类型 | 单端口同步 | `sp_ram`（tagv + bank），寄存器阵列（d_ram） |
+| RAM 类型 | 单端口同步 | `tagv_ram`（按位写使能，tagv），`data_bank_ram`（bank），寄存器阵列（d_ram） |
 | 读写 | 读分配 + 写回 + 写分配 | load miss 填 cache，store miss 先填再写 |
 | Victim Cache | 4 项 FIFO | 仅存储干净行，可配置开关 `VC_EN` |
 

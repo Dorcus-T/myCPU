@@ -10,7 +10,7 @@
 | 偏移位宽 | 4 bit | `OFFSET_WIDTH = 4`，16 字节 cache line |
 | 每行 Bank 数 | 4 | 每 Bank 32-bit，4 Bank = 128-bit |
 | 替换策略 | 树状 PLRU | WAY_NUM-1 = 1 bit/组 |
-| RAM 类型 | 单端口同步 | `sp_ram`，Vivado BRAM 推断，读延迟 1 拍 |
+| RAM 类型 | 单端口同步 | `tagv_ram`（按位写使能，tagv）+ `data_bank_ram`（bank），读延迟 1 拍 |
 
 **地址划分（32-bit 虚地址）：**
 
