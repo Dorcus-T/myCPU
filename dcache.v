@@ -315,11 +315,12 @@ module dcache (
 
     wire main_lookup_recheck_1     = main_lookup && (mmu_index_cancel || mmu_index_cancel_cacop) && !lookup_cancel && wb_idle;
     wire main_lookup_recheck_2     = main_lookup && (mmu_index_cancel || mmu_index_cancel_cacop) && !lookup_cancel && wb_write;
+    wire main_lookup_cancel        = main_lookup && lookup_cancel;
     wire main_lookup_reread        = (main_lookup || main_relookup) && !cache_hit && !(mmu_index_cancel || mmu_index_cancel_cacop) && (lookup_cache || cacop_en_r) && !lookup_cancel;
     wire main_lookup_uncached_st_miss = (main_lookup || main_relookup) && !cache_hit && !(mmu_index_cancel || mmu_index_cancel_cacop) && !lookup_cache && !cacop_en_r && !lookup_cancel && req_op;
     wire main_lookup_uncached_ld_miss = (main_lookup || main_relookup) && !cache_hit && !(mmu_index_cancel || mmu_index_cancel_cacop) && !lookup_cache && !cacop_en_r && !lookup_cancel && !req_op;
     wire main_lookup_lookup        = (main_lookup || main_relookup) && cache_hit && accept_new_req;
-    
+
     wire main_reread_relookup = main_reread && (mmu_index_cancel_r || mmu_index_cancel_cacop_r);
     wire main_reread_waitwr   = main_reread && !(mmu_index_cancel_r || mmu_index_cancel_cacop_r);
    

@@ -40,7 +40,6 @@ module icache (
     output wire [19:0]                debug_mmu_tag,  
     output wire [`I_INDEX_WIDTH-1:0]  debug_cpu_index,
     output wire                       debug_refill_cached,
-    output wire [`I_INDEX_WIDTH-1:0]  debug_refill_index,
     output wire [`I_INDEX_WIDTH-1:0]  debug_req_index,
 
     // perf 计数器（仿真统计用）
@@ -93,6 +92,8 @@ module icache (
     // Request Buffer — accept_new_req 时更新，miss 处理期间稳定
     reg  [`I_INDEX_WIDTH-1:0]  req_index;
     reg  [`I_OFFSET_WIDTH-1:0] req_offset;
+
+    // cacop buffer
     reg                        cacop_en_r;
     reg  [4:0]                 cacop_code_r;
     reg  [WAY_IDX_W-1:0]       cacop_way_r;
@@ -100,15 +101,11 @@ module icache (
 
     // Refill Buffer — LOOKUP miss 拍从 Request Buffer 快照，REFILL 期间不变
     reg  [`I_TAG_WIDTH-1:0]    refill_tag;
-    reg  [`I_INDEX_WIDTH-1:0]  refill_index;
-    reg  [`I_OFFSET_WIDTH-1:0] refill_offset;
     reg                        refill_cached;
     reg  [WAY_IDX_W-1:0]       refill_replace_way;
     reg  [BANK_IDX_W-1:0]      refill_cnt;
     reg  [31:0]                refill_line [0:BANK_NUM-1];
     reg  [`I_WAY_NUM-1:0]      refill_way_hit_r;
-    reg  [`I_TAG_WIDTH-1:0]    refill_relookup_tag;
-    reg                        refill_relookup_cache;
 
     // ============================================================
     // CACOP 辅助信号
@@ -142,10 +139,10 @@ module icache (
     // ============================================================
     // Tag 比较与命中判断
     // ============================================================
-    wire [`I_TAG_WIDTH-1:0] lookup_tag    = main_relookup ? refill_relookup_tag :
+    wire [`I_TAG_WIDTH-1:0] lookup_tag    = main_relookup ? refill_tag :
                                             cacop_en_r    ? mmu_cacop_tag[MMU_TAG_WD-1 : MMU_TAG_WD - `I_TAG_WIDTH]
                                                           : mmu_tag[MMU_TAG_WD-1 : MMU_TAG_WD - `I_TAG_WIDTH];
-    wire                    lookup_cache  = main_relookup ? refill_relookup_cache :
+    wire                    lookup_cache  = main_relookup ? refill_cached :
                                             cacop_en_r    ? 1'b1 
                                                           : mmu_cache;
 
@@ -263,13 +260,13 @@ module icache (
     end
 
     // 主状态机 — 下一状态逻辑（并行 assign，消除 case 级联延迟）
-    wire main_idle_stay    = main_idle   && !accept_new_req;
-    wire main_idle_lookup  = main_idle   && accept_new_req;
+    wire main_idle_idle    = main_idle && !accept_new_req;
+    wire main_idle_lookup  = main_idle && accept_new_req;
 
     wire main_lookup_recheck = main_lookup && (mmu_index_cancel || mmu_index_cancel_cacop) && !lookup_cancel;
     wire main_lookup_refill  = (main_lookup || main_relookup) && !(mmu_index_cancel || mmu_index_cancel_cacop) && !lookup_cancel && cacop_en_r;
     wire main_lookup_waitrd  = (main_lookup || main_relookup) && !(mmu_index_cancel || mmu_index_cancel_cacop) && !lookup_cancel && !cache_hit && !cacop_en_r;
-    wire main_lookup_hit     = (main_lookup || main_relookup) && cache_hit;
+    wire main_lookup_lookup  = (main_lookup || main_relookup) && cache_hit && accept_new_req;
 
     wire main_waitrd_refill = main_waitrd && rd_rdy;
     wire main_waitrd_wait   = main_waitrd && !rd_rdy;
@@ -283,7 +280,7 @@ module icache (
         if (main_lookup_recheck)                           main_next = MAIN_RELOOKUP;
         if (main_lookup_refill)                            main_next = MAIN_REFILL;
         if (main_lookup_waitrd)                            main_next = MAIN_WAITRD;
-        if (main_lookup_hit && accept_new_req)             main_next = MAIN_LOOKUP;
+        if (main_lookup_lookup)                            main_next = MAIN_LOOKUP;
         if (main_waitrd_refill)                            main_next = MAIN_REFILL;
         if (main_waitrd_wait)                              main_next = MAIN_WAITRD;
         if (main_refill_stay)                              main_next = MAIN_REFILL;
@@ -293,8 +290,8 @@ module icache (
     // PLRU 更新 — 命中 / 填充时标 MRU
     // ============================================================
     wire                      plru_upd_en    = ((main_lookup || main_relookup) && cache_hit) || refill_tagv_we;
-    wire [WAY_IDX_W-1:0]      plru_upd_way   = ((main_lookup || main_relookup) && cache_hit)   ? hit_way_idx : refill_replace_way;
-    wire [`I_INDEX_WIDTH-1:0] plru_upd_index = refill_tagv_we ? (cacop_en_r ? cacop_index_r : refill_index) : req_index;
+    wire [WAY_IDX_W-1:0]      plru_upd_way   = ((main_lookup || main_relookup) && cache_hit)  ? hit_way_idx : refill_replace_way;
+    wire [`I_INDEX_WIDTH-1:0] plru_upd_index = refill_tagv_we && cacop_en_r ? cacop_index_r : req_index;
 
     integer pnode, pparent, pui, prst;
     always @(posedge clk) begin
@@ -320,45 +317,26 @@ module icache (
         if (~resetn) begin
             req_index        <= {`I_INDEX_WIDTH{1'b0}};
             req_offset       <= {`I_OFFSET_WIDTH{1'b0}};
-            cacop_en_r       <= 1'b0;
-            cacop_code_r     <= 5'b0;
-            cacop_way_r      <= {WAY_IDX_W{1'b0}};
-            cacop_index_r    <= {`I_INDEX_WIDTH{1'b0}};
         end
         else if (accept_new_req) begin
             req_index        <= cpu_index;
             req_offset       <= cpu_offset;
-            cacop_en_r       <= cacop_en;
-            cacop_code_r     <= cacop_code;
-            cacop_way_r      <= cacop_way;
-            cacop_index_r    <= cacop_index;
         end
         else if (mmu_index_cancel) begin
             req_index <= {mmu_tag[MMU_TAG_WD - `I_TAG_WIDTH - 1 : 0],req_index[`I_INDEX_WIDTH - MMU_TAG_WD + `I_TAG_WIDTH -1 :0]};
-        end
-        else if (mmu_index_cancel_cacop) begin
-            cacop_index_r <= {mmu_cacop_tag[MMU_TAG_WD - `I_TAG_WIDTH - 1 : 0],cacop_index_r[`I_INDEX_WIDTH - MMU_TAG_WD + `I_TAG_WIDTH -1 :0]};
-        end
-        else if (main_refill) begin
-            cacop_en_r <= 1'b0;
         end
     end
 
     // Refill Buffer — LOOKUP miss 拍一次性锁存，整个 REFILL 期间不变
     always @(posedge clk) begin
         if (main_lookup && !cache_hit && !lookup_cancel) begin
-            refill_index        <= req_index;
             refill_tag          <= lookup_tag;
-            refill_offset       <= req_offset;
             refill_cached       <= lookup_cache;
             refill_replace_way  <= replace_way;
             refill_cnt          <= {BANK_IDX_W{1'b0}};
             refill_way_hit_r    <= way_hit;
-            refill_relookup_cache <= lookup_cache;
-            refill_relookup_tag   <= lookup_tag;
         end
         else if (main_relookup && !cache_hit) begin
-            refill_index        <= req_index;
             refill_replace_way  <= replace_way;
             refill_way_hit_r    <= way_hit;   // 物理 index 重查结果：hit 型 cacop 靠它决定是否失效
         end
@@ -366,6 +344,28 @@ module icache (
             refill_cnt <= refill_cnt + 1'b1;
             if (refill_cached)
             refill_line[refill_cnt] <= return_data;
+        end
+    end
+    
+    // cacop buffer
+    always @(posedge clk) begin
+        if (~resetn) begin
+            cacop_en_r       <= 1'b0;
+            cacop_code_r     <= 5'b0;
+            cacop_way_r      <= {WAY_IDX_W{1'b0}};
+            cacop_index_r    <= {`I_INDEX_WIDTH{1'b0}};
+        end
+        else if (accept_new_req) begin
+            cacop_en_r       <= cacop_en;
+            cacop_code_r     <= cacop_code;
+            cacop_way_r      <= cacop_way;
+            cacop_index_r    <= cacop_index;
+        end
+        else if (mmu_index_cancel_cacop) begin
+            cacop_index_r <= {mmu_cacop_tag[MMU_TAG_WD - `I_TAG_WIDTH - 1 : 0],cacop_index_r[`I_INDEX_WIDTH - MMU_TAG_WD + `I_TAG_WIDTH -1 :0]};
+        end
+        else if (main_refill) begin
+            cacop_en_r <= 1'b0;
         end
     end
 
@@ -386,7 +386,7 @@ module icache (
     wire cpu_fifo_re    = cpu_accept && !cpu_fifo_empty;
     
     wire lookup_read_hit_done  = (main_lookup || main_relookup) && cache_hit;
-    wire refill_read_miss_done = main_refill && return_valid && (refill_cnt == refill_offset[`I_OFFSET_WIDTH-1:2] || !refill_cached);
+    wire refill_read_miss_done = main_refill && return_valid && (refill_cnt == req_offset[`I_OFFSET_WIDTH-1:2] || !refill_cached);
     
     wire [31:0] live_rdata = lookup_read_hit_done  ? lookup_rdata :
                              refill_read_miss_done ? return_data  : 32'd0;
@@ -433,12 +433,10 @@ module icache (
     // ============================================================
     // TagV相关逻辑
     wire                      refill_tagv_we = main_refill && ((return_valid && return_last && refill_cached) || (cacop_en_r && ((cacop_code_r[4:3] == 2'b00) || (cacop_code_r[4:3] == 2'b01) || ((cacop_code_r[4:3] == 2'b10) && (|refill_way_hit_r)))));
-    wire [`I_INDEX_WIDTH-1:0] tagv_waddr_sel = cacop_en_r ? cacop_index_r : refill_index;
-    // 按位写使能 [TAG:1]=tag, [0]=V：cacop 00 只写 tag（保 V）；01/10 只清 V；refill 全写
-    wire [`I_TAG_WIDTH:0]     tagv_wen_sel = cacop_en_r
-                                           ? ((cacop_code_r[4:3] == 2'b00) ? { {(`I_TAG_WIDTH){1'b1}}, {1'b0} }
-                                                                          : { {(`I_TAG_WIDTH){1'b0}}, {1'b1} })
-                                           : { {(`I_TAG_WIDTH){1'b1}}, {1'b1} };
+    wire [`I_INDEX_WIDTH-1:0] tagv_waddr_sel = cacop_en_r ? cacop_index_r : req_index;
+    wire [`I_TAG_WIDTH:0]     tagv_wen_sel = cacop_en_r ? ((cacop_code_r[4:3] == 2'b00) ? {{(`I_TAG_WIDTH){1'b1}}, {1'b0}}
+                                                                                        : {{(`I_TAG_WIDTH){1'b0}}, {1'b1}})
+                                                                                        : {{(`I_TAG_WIDTH){1'b1}}, {1'b1}};
     wire [`I_TAG_WIDTH:0]     tagv_wdata_sel = cacop_en_r ? {(`I_TAG_WIDTH+1){1'b0}} : {refill_tag, 1'b1};
 
     genvar gt;
@@ -472,7 +470,7 @@ module icache (
                 wire bank_wr_refill    = main_refill && return_valid && return_last && (refill_replace_way == gw) && refill_cached;
                 wire bank_en           = bank_wr_refill || ram_read_en;
                 wire [ 3:0] bank_wen   = bank_wr_refill ? 4'b1111 : 4'b0;
-                wire [`I_INDEX_WIDTH-1:0] bank_addr  = bank_wr_refill ? refill_index : ram_raddr;
+                wire [`I_INDEX_WIDTH-1:0] bank_addr  = bank_wr_refill ? req_index : ram_raddr;
                 wire [31:0] bank_wdata = bank_wr_refill ? ((refill_cnt == gb) ? return_data : refill_line[gb]) : 32'b0;
 
                 data_bank_ram #(
@@ -495,10 +493,8 @@ module icache (
     // AXI 读请求
     // ============================================================
     assign rd_req = main_waitrd;
-
     assign rd_type = refill_cached ? 3'b100 : 3'b010;
-
-    assign rd_addr = refill_cached ? {refill_tag, refill_index, {`I_OFFSET_WIDTH{1'b0}}} : {refill_tag, refill_index, refill_offset};
+    assign rd_addr = refill_cached ? {refill_tag, req_index, {`I_OFFSET_WIDTH{1'b0}}} : {refill_tag, req_index, req_offset};
 
     // ============================================================
     // 性能计数器
@@ -537,7 +533,6 @@ module icache (
     assign debug_mmu_tag       = mmu_tag;
     assign debug_cpu_index     = cpu_index;
     assign debug_refill_cached = refill_cached;
-    assign debug_refill_index  = refill_index;
     assign debug_req_index     = req_index;
 
     assign debug_perf_total_req     = perf_total_req;
