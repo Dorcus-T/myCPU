@@ -93,6 +93,7 @@
   - `frame_start` 时清 `swap_pending`（表示新地址已开始被扫描）；
   - `STATUS[0] = swap_pending`
 - `IP/VGA/vga_dma.v`：**帧首立即清 FIFO/像素解包**：`frame_start` 时直接清 `wr_ptr/rd_ptr/fifo_cnt/pair_data/pair_cnt`，避免上一帧残留导致“向左平移一段”的伪影
+  - 同时把 `fb_base` 在 `frame_start` 锁存为 `fb_base_r`，当前帧全程用锁存值计算 `fb_limit`，避免帧中间因 CDC 地址变化导致回绕异常
 - `IP/CONFREG/confreg_syn.v`：PS/2 接收器 + 16 字节 FIFO，`0x1fd0f040` DATA / `0x1fd0f044` STATUS（已确认）
 - `fpga/loongson/soc_up.xdc`：PS/2 pins `Y2`/`AD1` LVCMOS33（已确认）
 - `IP/xilinx_ip/2023.2/clk_pll_33/clk_pll_33.xci`：`CLKOUT1_REQUESTED_OUT_FREQ=60.000`（CPU 60MHz）、`CLKOUT2=33.000`（已确认）
