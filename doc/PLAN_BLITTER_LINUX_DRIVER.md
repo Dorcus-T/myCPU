@@ -905,7 +905,7 @@ git commit -m "docs: update blitter Linux driver status"
 | cached 配置写回顺序不被硬件正确接收 | 若 FILL/COPY 不启动，临时把 `blt->cfg` 改为 uncached 单拍写定位 |
 | fb_fillrect/fb_copyarea 在原子上下文被调用 | `in_interrupt() || in_atomic()` 时回退软件实现 |
 | COPY 重叠导致花屏 | 检测重叠并回退 `sys_copyarea` |
-| 宽 COPY 触发硬件 256 字突发导致 FIFO 卡死 | 驱动将 width>510 的 COPY 拆成多个 ≤510 像素的矩形（`BLT_MAX_COPY_WIDTH`）；根本修复需改 RTL 限制突发长度 ≤ FIFO_DEPTH |
+
 | VGA DMA 与 Blitter 争带宽 | 上板压测；必要时限制单次矩形大小或加延时 |
 | `/dev/blitter` 用户态无法获得物理地址 | 通过 `/dev/fb0` 的 `FBIOGET_FSCREENINFO` 获取 `smem_start`；DOOM 使用双缓冲中的 back buffer 作为 shadow |
 
