@@ -21,7 +21,7 @@
 | Phase 3 VGA/DMA 寄存器接入 CPU | ✅ 完成 | 已上板验证；VGA regs @ `0x1fe90000`（依据既有记录） |
 | Phase 3B 2D Blitter 硬件集成 | ✅ 已验证 | 12:10 bitstream 已生成；Blitter FILL/COPY 驱动已上板验证 |
 | Phase 4 Linux framebuffer 驱动 | ✅ 代码/构建完成 | 待上板最终确认 |
-| Phase 5 键盘输入（矩阵 + PS/2） | 🔄 修复中 | PS/2 已加 PULLUP + 初始化只发一轮；待新 bitstream 验证 |
+| Phase 5 键盘输入（矩阵 + PS/2 + USB HID） | ✅ 代码/构建完成 | 矩阵/PS2/USB 键盘驱动均已接入；待新 bitstream 上板验证 |
 | Phase 6 Snake 2D 游戏 | 🔄 构建完成待上板 | `integration/tools/snake.c` → `/usr/bin/snake`，已重建 `build/linux-loongson-soc/vmlinux`（17M，含 snake）；支持三缓冲（VGA_FB_BUFFERS=3）、墙体、分数、dirty-rect、渲染线程；待上板验证 |
 | Phase 7 集成回归 | ⏸️ 未开始 | Snake + VGA + 键盘 + Blitter 回归 |
 | 2D Blitter 软件适配 | ✅ 已验证 | 独立驱动 + VGA fb 加速钩子已上板验证 |
@@ -37,7 +37,7 @@
 ### 2.1 内核侧（WSL）
 
 - 分支：`vga-both-keyboards`
-- HEAD：`bd729803fc22fcce30007e7c6c25286c96fc99b7`（2026-08-19，短号 `bd72980`）
+- HEAD：`c5dacab541e285b892814d29af5fb83d09b19789`（2026-08-19，短号 `c5dacab`）
   - `bd72980` `fbdev: loongson-soc-vga: triple buffering with async flip`
   - 前序提交（本会话新增）：
     - `5594de2` defconfig 保留 fbcon/logo，默认关光标（`vt.global_cursor_default=0`）
@@ -47,15 +47,15 @@
 - VGA 驱动：`drivers/video/fbdev/loongson_soc_vga.c`
   - 已实现：`ioremap_cache`、`fb_pan_display`、`fb_sync`、60Hz flush timer、**三缓冲**（`VGA_FB_BUFFERS=3`）
   - **新增**：`fb_pan_display` 异步 flip（不忙等），配合硬件单帧 pending swap；三缓冲轮转由 `fb_bench`/应用负责
-- 键盘驱动：`loongson_soc_matrix_keypad.c` + `loongson_soc_ps2.c`
-- DTS：`loongson-soc.dts` 含 `vga@1fe90000`、`blitter@1fea0000`、`keyboard@1fd0f040`（PS/2）、`keyboard@1fd0f024`（矩阵）
-- defconfig：`CONFIG_FB_LOONGSON_SOC_VGA=y`、`CONFIG_FB_LOONGSON_SOC_BLITTER=y`、`CONFIG_FRAMEBUFFER_CONSOLE=y`、`CONFIG_LOGO=y`，cmdline 含 `vt.global_cursor_default=0`
+- 键盘驱动：`loongson_soc_matrix_keypad.c` + `loongson_soc_ps2.c` + `loongson_soc_usb_kbd.c`
+- DTS：`loongson-soc.dts` 含 `vga@1fe90000`、`blitter@1fea0000`、`usb-kbd@1feb0000`、`keyboard@1fd0f040`（PS/2）、`keyboard@1fd0f024`（矩阵）
+- defconfig：`CONFIG_FB_LOONGSON_SOC_VGA=y`、`CONFIG_FB_LOONGSON_SOC_BLITTER=y`、`CONFIG_KEYBOARD_LOONGSON_SOC_USB=y`、`CONFIG_FRAMEBUFFER_CONSOLE=y`、`CONFIG_LOGO=y`，cmdline 含 `vt.global_cursor_default=0`
 - **Blitter 软件适配已实现并上板验证**：DTS 含 `blitter@1fea0000`，新增 `loongson_soc_blitter.c/.h`（`/dev/blitter` + 导出 API），VGA fbdev `fb_fillrect`/`fb_copyarea` 已接入 blitter；`fb_bench` 支持 `blit`（每帧交替棋盘格）、`fill`（单次整屏 FILL）、`copy`（单次整屏 COPY）。
 
 ### 2.2 集成仓库（WSL）
 
 - 分支：`blitter-linux-driver`
-- HEAD：`2244779`（2026-08-19，`fb_bench: use triple-buffer rotation...`）
+- HEAD：`9790fb9`（2026-08-19，`integration: bump LINUX_COMMIT to c5dacab`）
   - 相关提交：`3616c0b`（bump to bd72980）、`e76105a`（fb_bench blit 每帧交替棋盘格）、`e15bc45`（fill/copy 模式）、`ff274f7`（真双缓冲）、`410256b`（棋盘格）、`0f94ea2`（禁用 VGA getty + bump）
 - 已包含：`BR2_PACKAGE_SCREEN=y`、`S99tty1`（已改为 no-op，VGA 不再启动 getty）、`fb_bench`、`versions.env` 指向内核 `bd72980`
 - 完整 vmlinux：`/home/dorcus_t/la32r-upstream-integration/build/linux-loongson-soc/vmlinux`
@@ -171,6 +171,7 @@
 | Blitter DTS | `arch/loongarch/boot/dts/loongson-soc.dts` `blitter@1fea0000` |
 | 矩阵键盘驱动 | `drivers/input/keyboard/loongson_soc_matrix_keypad.c` |
 | PS/2 驱动 | `drivers/input/keyboard/loongson_soc_ps2.c` |
+| USB HID 键盘驱动 | `drivers/input/keyboard/loongson_soc_usb_kbd.c` |
 | DTS | `arch/loongarch/boot/dts/loongson-soc.dts` |
 | defconfig | `arch/loongarch/configs/loongson_soc_defconfig` |
 | 集成仓库 | `/home/dorcus_t/la32r-upstream-integration` |
