@@ -22,7 +22,7 @@
 | Phase 3B 2D Blitter 硬件集成 | ✅ 已验证 | 12:10 bitstream 已生成；Blitter FILL/COPY 驱动已上板验证 |
 | Phase 4 Linux framebuffer 驱动 | ✅ 代码/构建完成 | 待上板最终确认 |
 | Phase 5 键盘输入（矩阵 + PS/2） | 🔄 修复中 | PS/2 已加 PULLUP + 初始化只发一轮；待新 bitstream 验证 |
-| Phase 6 Snake 2D 游戏 | 🔄 构建完成待上板 | `integration/tools/snake.c` → `/usr/bin/snake`，已重建 `build/linux-loongson-soc/vmlinux`（16M，含 snake）；待上板验证 |
+| Phase 6 Snake 2D 游戏 | 🔄 构建完成待上板 | `integration/tools/snake.c` → `/usr/bin/snake`，已重建 `build/linux-loongson-soc/vmlinux`（16M，含 snake）；已实现 dirty-rect 增量渲染；待上板验证 |
 | Phase 7 集成回归 | ⏸️ 未开始 | Snake + VGA + 键盘 + Blitter 回归 |
 | 2D Blitter 软件适配 | ✅ 已验证 | 独立驱动 + VGA fb 加速钩子已上板验证 |
 
@@ -88,12 +88,12 @@
 - `IP/AMBA/axi_mux_syn.v`：`SLV_MUX_NUM` 6→7，s6 decode `0x1fea`，写响应 round-robin（已确认）
 - `chip/soc_demo/loongson/soc_top.v`：blitter 例化、PS/2 顶层端口、VGA 默认 `FB_ADDR=0x06000000` / `FB_STRIDE=1280`（已确认）
   - **新增 pending swap 相关**：`vga_regs` 增加 `frame_start` 输入并输出 `status`；`vga_frame_start` 经 toggle 同步器转到 33MHz AXI 域（`vga_frame_start_axi`）
-- `IP/VGA/vga_regs.v`：**单帧 pending swap**：
-  - CPU 写 `0x00 FB_ADDR` 立即更新 `fb_addr`，并置 `swap_pending=1`；
-  - `frame_start` 时清 `swap_pending`（表示新地址已开始被扫描）；
-  - `STATUS[0] = swap_pending`
+- `IP/VGA/vga_regs.v`：**两段式 pending swap（修正同拍竞争）**：
+  - CPU 写 `0x00 FB_ADDR` 更新 `fb_addr_next`，置 `swap_pending=1`、`swap_commit=0`；
+  - 第 1 个 `frame_start`：`fb_addr <= fb_addr_next`，置 `swap_commit=1`；第 2 个 `frame_start` 清 `swap_pending/swap_commit`；
+  - `STATUS[0] = swap_pending`；`frame_start` 先于写分支，同拍写不会丢新 swap
 - `IP/VGA/vga_dma.v`：**帧首立即清 FIFO/像素解包**：`frame_start` 时直接清 `wr_ptr/rd_ptr/fifo_cnt/pair_data/pair_cnt`，避免上一帧残留导致“向左平移一段”的伪影
-  - 同时把 `fb_base` 在 `frame_start` 锁存为 `fb_base_r`，当前帧全程用锁存值计算 `fb_limit`，避免帧中间因 CDC 地址变化导致回绕异常
+  - `fb_base` 使用 `fb_base_cur/fb_base_next` 双寄存器：`frame_start` 时 `fb_base_cur <= fb_base_next`、`fb_base_next <= fb_base`、`rd_addr <= fb_base_next`；当前帧 `fb_limit` 由 `fb_base_cur` 计算，避免帧中回绕异常；`dma_en=0` 时同步更新 cur/next
 - `IP/CONFREG/confreg_syn.v`：PS/2 接收器 + 16 字节 FIFO，`0x1fd0f040` DATA / `0x1fd0f044` STATUS（已确认）
 - `fpga/loongson/soc_up.xdc`：PS/2 pins `Y2`/`AD1` LVCMOS33（已确认）
 - `IP/xilinx_ip/2023.2/clk_pll_33/clk_pll_33.xci`：`CLKOUT1_REQUESTED_OUT_FREQ=60.000`（CPU 60MHz）、`CLKOUT2=33.000`（已确认）
