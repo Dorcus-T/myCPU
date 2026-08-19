@@ -93,7 +93,7 @@
   - 第 1 个 `frame_start`：`fb_addr <= fb_addr_next`，置 `swap_commit=1`；第 2 个 `frame_start` 清 `swap_pending/swap_commit`；
   - `STATUS[0] = swap_pending`；`frame_start` 先于写分支，同拍写不会丢新 swap
 - `IP/VGA/vga_dma.v`：**帧首立即清 FIFO/像素解包**：`frame_start` 时直接清 `wr_ptr/rd_ptr/fifo_cnt/pair_data/pair_cnt`，避免上一帧残留导致“向左平移一段”的伪影
-  - `fb_base` 使用 `fb_base_cur/fb_base_next` 双寄存器：`frame_start` 时 `fb_base_cur <= fb_base_next`、`fb_base_next <= fb_base`、`rd_addr <= fb_base_next`；当前帧 `fb_limit` 由 `fb_base_cur` 计算，避免帧中回绕异常；`dma_en=0` 时同步更新 cur/next
+  - `fb_base` 使用单 `fb_base_cur` 锁存：`frame_start` 时 `fb_base_cur <= fb_base`、`rd_addr <= fb_base`；当前帧 `fb_limit` 由 `fb_base_cur` 计算，避免帧中回绕异常；`dma_en=0` 时同步更新 cur
 - `IP/CONFREG/confreg_syn.v`：PS/2 接收器 + 16 字节 FIFO，`0x1fd0f040` DATA / `0x1fd0f044` STATUS（已确认）
 - `fpga/loongson/soc_up.xdc`：PS/2 pins `Y2`/`AD1` LVCMOS33（已确认）
 - `IP/xilinx_ip/2023.2/clk_pll_33/clk_pll_33.xci`：`CLKOUT1_REQUESTED_OUT_FREQ=60.000`（CPU 60MHz）、`CLKOUT2=33.000`（已确认）
