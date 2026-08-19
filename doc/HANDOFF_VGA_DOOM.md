@@ -22,7 +22,7 @@
 | Phase 3B 2D Blitter 硬件集成 | ✅ 已验证 | 12:10 bitstream 已生成；Blitter FILL/COPY 驱动已上板验证 |
 | Phase 4 Linux framebuffer 驱动 | ✅ 代码/构建完成 | 待上板最终确认 |
 | Phase 5 键盘输入（矩阵 + PS/2） | 🔄 修复中 | PS/2 已加 PULLUP + 初始化只发一轮；待新 bitstream 验证 |
-| Phase 6 Snake 2D 游戏 | 🔄 构建完成待上板 | `integration/tools/snake.c` → `/usr/bin/snake`，已重建 `build/linux-loongson-soc/vmlinux`（16M，含 snake）；已实现 dirty-rect 增量渲染；待上板验证 |
+| Phase 6 Snake 2D 游戏 | 🔄 构建完成待上板 | `integration/tools/snake.c` → `/usr/bin/snake`，已重建 `build/linux-loongson-soc/vmlinux`（17M，含 snake）；支持三缓冲（VGA_FB_BUFFERS=3）、墙体、分数、dirty-rect、渲染线程；待上板验证 |
 | Phase 7 集成回归 | ⏸️ 未开始 | Snake + VGA + 键盘 + Blitter 回归 |
 | 2D Blitter 软件适配 | ✅ 已验证 | 独立驱动 + VGA fb 加速钩子已上板验证 |
 
@@ -114,7 +114,7 @@
   - `frame_start` 后暂停发新读请求，等旧 burst 结束再清 FIFO；
   - 每帧开始时把读地址重置回 framebuffer 基地址；
   - 避免 DMA 读指针与 VGA 帧扫描不同步导致的偏移/撕裂。
-- 内核驱动仍保留双缓冲（`yres_virtual=960`），显示偏移不再归因于软件配置。
+- 内核驱动已改为三缓冲（`yres_virtual=1440`），显示偏移不再归因于软件配置。
 
 ---
 
@@ -237,7 +237,7 @@ md.l 0x9fea0020 1            # STATUS
    - `fb_bench fill` / `fb_bench copy`：对比单次大操作吞吐；
    - 矩阵键盘 `/dev/input/event0`；PS/2 到手后验证；
    - PS/2 键盘：U-Boot `md.l 0x9fd0f044 1` 看 FIFO 计数，Linux `evtest /dev/input/eventX` 验证按键。
-3. **Phase 6 Snake 2D 游戏**：✅ 代码已完成（`integration/tools/snake.c` → `/usr/bin/snake`）：显示完全走 Blitter FILL（无 mmap/pwrite），双缓冲 `FBIOPAN_DISPLAY`，游戏区 320×200（32×20 格 ×10px），读 evdev 方向键/WASD；待上板验证。
+3. **Phase 6 Snake 2D 游戏**：✅ 代码已完成（`integration/tools/snake.c` → `/usr/bin/snake`）：显示完全走 Blitter FILL（无 mmap/pwrite），三缓冲 `FBIOPAN_DISPLAY`，游戏区 320×200（32×20 格 ×10px），读 evdev 方向键/WASD；待上板验证。
 4. **Phase 4B 2D Blitter 软件适配**（✅ 已验证；参考 `IP/BLITTER/README.md` 与 `doc/PLAN_BLITTER_LINUX_DRIVER.md`）：
    - DTS 含 `blitter@1fea0000`；
    - 内核驱动：`loongson_soc_blitter.c`（`/dev/blitter` + 导出 API），VGA fb `fb_fillrect`/`fb_copyarea` 已接入；
