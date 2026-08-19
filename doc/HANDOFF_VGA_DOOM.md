@@ -1,4 +1,4 @@
-# Handoff: VGA 显示 + DOOM 移植 + 2D Blitter（VGA_DOOM_PLAN.md）
+# Handoff: VGA 显示 + 2D 游戏（Snake）+ 2D Blitter（VGA_DOOM_PLAN.md）
 
 > **本文件是当前唯一权威 handoff。** 2026-08-19 中期复核整理（v2），合并了此前散落在
 > `~/.claude/tmp/chiplab/tmp/` 与 `%TEMP%` 的多份临时 handoff；那些临时文件不再维护，
@@ -7,6 +7,7 @@
 > - 完整计划：`Z:\home\dorcus_t\chiplab\IP\myCPU\doc\VGA_DOOM_PLAN.md`
 > - 2D Blitter 软件适配参考：`C:\Users\16622.DESKTOP-5S661OC\.claude\tmp\chiplab\IP\BLITTER\README.md`
 > - OpenViking：未检索到已存 VGA/blitter 记忆（本次复核 `viking_search` 无结果），关键结论以本文件为准。
+> - 方案变更：2026-08-19 由 DOOM 3D 移植调整为轻量 2D 贪吃蛇（Snake），原因：60MHz LA32 顺序流水线跑 3D 不现实。
 
 ---
 
@@ -18,12 +19,12 @@
 | Phase 1 VGA 彩条 | ✅ 完成 | 已上板验证（依据既有记录） |
 | Phase 2 DMA + DDR3 | ✅ 完成 | 已上板验证；cache 一致性用 CACOP（依据既有记录） |
 | Phase 3 VGA/DMA 寄存器接入 CPU | ✅ 完成 | 已上板验证；VGA regs @ `0x1fe90000`（依据既有记录） |
-| Phase 3B 2D Blitter 硬件集成 | 🔄 待上板 | RTL 新布局 + 仿真全 PASS；10:30 bitstream 已生成，待上板验证 |
+| Phase 3B 2D Blitter 硬件集成 | ✅ 已验证 | 12:10 bitstream 已生成；Blitter FILL/COPY 驱动已上板验证 |
 | Phase 4 Linux framebuffer 驱动 | ✅ 代码/构建完成 | 待上板最终确认 |
-| Phase 5 键盘输入（矩阵 + PS/2） | ✅ 代码/构建完成 | 待 FPGA bitstream 重建后上板确认 |
-| Phase 6 DOOM 移植 | ⏳ 未开始 | 建议 doomgeneric |
-| Phase 7 集成回归 | ⏸️ 未开始 | |
-| 2D Blitter 软件适配 | ✅ 代码/构建完成 | 独立驱动 + VGA fb 加速钩子已实现，待上板验证 |
+| Phase 5 键盘输入（矩阵 + PS/2） | 🔄 修复中 | PS/2 已加 PULLUP + 初始化只发一轮；待新 bitstream 验证 |
+| Phase 6 Snake 2D 游戏 | ⏳ 未开始 | 方案已从 DOOM 切换为 Snake |
+| Phase 7 集成回归 | ⏸️ 未开始 | Snake + VGA + 键盘 + Blitter 回归 |
+| 2D Blitter 软件适配 | ✅ 已验证 | 独立驱动 + VGA fb 加速钩子已上板验证 |
 
 **显示偏移：已解决**（硬件问题，FPGA 帧同步修复，见 2.5）。
 
@@ -36,23 +37,30 @@
 ### 2.1 内核侧（WSL）
 
 - 分支：`vga-both-keyboards`
-- HEAD：`e3de47f17e797f3b29defc6603429e9a020d558d`（2026-08-19）
-  - `fbdev: loongson-soc-vga: use sysmem helpers for cached framebuffer`
-  - 前序提交：`90105db98318`（ypanstep）、`43a133800ee1`（双缓冲）、`803cd825baf6`（矩阵+PS/2）、`d5bc27d31423`（VGA 驱动）
+- HEAD：`d2adf8503b2bb1d16b4465bd12426ef7cf7f9e04`（2026-08-19，短号 `d2adf85`）
+  - `d2adf85` `fbdev: loongson-soc-vga: wait for pending swap on pan display`
+  - 前序提交（本会话新增）：
+    - `5594de2` defconfig 保留 fbcon/logo，默认关光标（`vt.global_cursor_default=0`）
+    - `f6b6318` 移除 COPY 拆分 workaround（RTL 已修 `remain_words`）
+    - `84dbcde` / `52e1c1b` blitter 风格与寄存器偏移修复
+    - `3c6762d` / `92ae7a0` / `4e77e0c` VGA fb 加速钩子、blitter 驱动、DTS/config
 - VGA 驱动：`drivers/video/fbdev/loongson_soc_vga.c`
   - 已实现：`ioremap_cache`、`fb_pan_display`、`fb_sync`、60Hz flush timer、双缓冲（`VGA_FB_BUFFERS=2`）
+  - **新增**：`fb_pan_display` 写完 `FB_ADDR` 后等待 `STATUS[0]`（swap_pending）清零，配合硬件 pending swap 消除撕裂
 - 键盘驱动：`loongson_soc_matrix_keypad.c` + `loongson_soc_ps2.c`
-- DTS：`loongson-soc.dts` 含 `vga@1fe90000`、`keyboard@1fd0f040`（PS/2）、`keyboard@1fd0f024`（矩阵）
-- defconfig：`CONFIG_FB_LOONGSON_SOC_VGA=y` 等已确认
-- **Blitter 软件适配已实现**：DTS 含 `blitter@1fea0000` 节点，新增 `loongson_soc_blitter.c`（`/dev/blitter` + 导出 API），VGA fbdev 的 `fb_fillrect`/`fb_copyarea` 已接入 blitter，`fb_bench.c` 含 `blit` 模式。
+- DTS：`loongson-soc.dts` 含 `vga@1fe90000`、`blitter@1fea0000`、`keyboard@1fd0f040`（PS/2）、`keyboard@1fd0f024`（矩阵）
+- defconfig：`CONFIG_FB_LOONGSON_SOC_VGA=y`、`CONFIG_FB_LOONGSON_SOC_BLITTER=y`、`CONFIG_FRAMEBUFFER_CONSOLE=y`、`CONFIG_LOGO=y`，cmdline 含 `vt.global_cursor_default=0`
+- **Blitter 软件适配已实现并上板验证**：DTS 含 `blitter@1fea0000`，新增 `loongson_soc_blitter.c/.h`（`/dev/blitter` + 导出 API），VGA fbdev `fb_fillrect`/`fb_copyarea` 已接入 blitter；`fb_bench` 支持 `blit`（每帧交替棋盘格）、`fill`（单次整屏 FILL）、`copy`（单次整屏 COPY）。
 
 ### 2.2 集成仓库（WSL）
 
-- HEAD：`187d97b`（2026-08-19，fb_bench game-like 320×200 + display 模式）
-- 已包含：`BR2_PACKAGE_SCREEN=y`、`S99tty1`（VGA tty1 getty）、`fb_bench`、`versions.env` 指向上述内核 commit
+- 分支：`blitter-linux-driver`
+- HEAD：`a10ec58`（2026-08-19，`integration: bump LINUX_COMMIT to d2adf85`）
+  - 相关提交：`e76105a`（fb_bench blit 每帧交替棋盘格）、`e15bc45`（fill/copy 模式）、`ff274f7`（真双缓冲）、`410256b`（棋盘格）、`0f94ea2`（禁用 VGA getty + bump）
+- 已包含：`BR2_PACKAGE_SCREEN=y`、`S99tty1`（已改为 no-op，VGA 不再启动 getty）、`fb_bench`、`versions.env` 指向内核 `d2adf85`
 - 完整 vmlinux：`/home/dorcus_t/la32r-upstream-integration/build/linux-loongson-soc/vmlinux`
-  - 约 15 MiB（`ls -lh` 显示 15M，生成时间 2026-08-19 02:00）
-  - 含 initramfs、screen、fb_bench
+  - **16 MiB**（2026-08-19 13:19 构建）
+  - 含 initramfs、fb_bench（`blit`/`fill`/`copy` 模式）
 
 ### 2.3 FPGA 侧（Windows `~/.claude/tmp/chiplab`）
 
@@ -73,10 +81,17 @@
   - 启动语义：写 CTRL 且 bit0=1 即启动，启动自动清 DONE/ERR；支持 cached 配置（`0x00~0x1C` 一条 32B cache line，CTRL 在最高地址，最后写回）
   - AXI 从方写 FIFO：8 深度 write-beat FIFO，WREADY 满才反压；B 在 W 最后一拍被 FIFO 接受时即返回（写完成=写入 FIFO），寄存器后台逐拍落位
   - 中断接线已修正：`blt_irq` 原未接入 CPU 中断；现接到 `int_out[5]` → `intrpt[5]` → ESTAT[7]
+  - COPY 宽行卡死修复：`remain_words` 原用 8 位，剩余 256 words 时回绕算出 burst_len=255，COPY 因 32 深读 FIFO 永远等不到而卡死；改为 32 位计算后 640px（320 words）宽 COPY 仿真通过
+  - 12:10 bitstream 已包含用户最新 PS/2 修改
   - 约束：WIDTH 偶数；地址 4 字节对齐；strides 为字节数
   - 仿真：`tmp/blitter_wlast_tb.v` 在 WSL 重新编译运行，输出 **`PASS: blitter_wlast_tb all ok`**（覆盖 FILL、COPY、重复 COPY、无自动重启、burst 配置 FILL）；旧 `tmp/blitter_tb.v` 也 PASS
 - `IP/AMBA/axi_mux_syn.v`：`SLV_MUX_NUM` 6→7，s6 decode `0x1fea`，写响应 round-robin（已确认）
 - `chip/soc_demo/loongson/soc_top.v`：blitter 例化、PS/2 顶层端口、VGA 默认 `FB_ADDR=0x06000000` / `FB_STRIDE=1280`（已确认）
+  - **新增 pending swap 相关**：`vga_regs` 增加 `frame_start` 输入并输出 `status`；`vga_frame_start` 经 toggle 同步器转到 33MHz AXI 域（`vga_frame_start_axi`）
+- `IP/VGA/vga_regs.v`：**已改为 pending swap**：
+  - CPU 写 `0x00 FB_ADDR` 只更新 `fb_addr_next`，置 `swap_pending=1`；
+  - `frame_start` 时两段式提交：第一次锁存 `fb_addr <= fb_addr_next`，第二次清 `swap_pending`；
+  - `STATUS[0] = swap_pending`（原 STATUS 硬编码 0 已移除）
 - `IP/CONFREG/confreg_syn.v`：PS/2 接收器 + 16 字节 FIFO，`0x1fd0f040` DATA / `0x1fd0f044` STATUS（已确认）
 - `fpga/loongson/soc_up.xdc`：PS/2 pins `Y2`/`AD1` LVCMOS33（已确认）
 - `IP/xilinx_ip/2023.2/clk_pll_33/clk_pll_33.xci`：`CLKOUT1_REQUESTED_OUT_FREQ=60.000`（CPU 60MHz）、`CLKOUT2=33.000`（已确认）
@@ -85,9 +100,9 @@
 
 ### 2.4 Bitstream 现状（重要）
 
-- **2026-08-19 10:30 最新 bitstream 已生成**：`system_run.runs/impl_1/soc_top.bit`，`BLITTER_BITSTREAM_OK`。
-- 包含：新寄存器布局（0x00~0x1C 配置 + 0x20 STATUS）、cache line burst 写支持、8 深度 AXI 从方写 FIFO（B 入队即返回）、启动自动清 STATUS、中断已接入 `intrpt[5]`→ESTAT[7]。
-- 时序：WNS=0.978，TNS=0，无时序违例。
+- **12:10 bitstream 存在**：`system_run.runs/impl_1/soc_top.bit`，包含 Blitter 新寄存器布局、cache line burst 写、8 深度写 FIFO、中断接入 `intrpt[5]`→ESTAT[7]；**但不包含 pending swap / CDC 同步**。
+- **含 pending swap 的 bitstream 尚未成功生成**：`tmp/run_pending_swap_build.log` 显示 `synth_1` 完成后 `ERROR: synthesis failed`（exit 1），需要先查 synth 错误再重跑。
+- 时序参考：此前 route 后 WNS=0.978、TNS=0（pending swap 版本未跑完，不能作为该版本时序结论）。
 
 ### 2.5 显示偏移（已解决，硬件问题）
 
@@ -107,6 +122,7 @@
 2. **VGA 寄存器**（物理 `0x1fe90000`）：
    - `0x00 FB_ADDR` / `0x04 FB_STRIDE` / `0x08 CTRL` / `0x0C STATUS`
    - `CTRL[0]=1` 切 framebuffer/DMA，`=0` 回彩条
+   - **新语义**：`FB_ADDR` 为 pending swap，硬件在 `frame_start` 才真正切换；`STATUS[0]=1` 表示 swap pending，驱动 flip 后需等它清零
 3. **Blitter 寄存器**（物理 `0x1fea0000`）：见 2.3 新布局。
 4. **U-Boot/裸机访问必须用直接映射别名**：
    - VGA 物理 `0x1fe90000` → uncached `0x9fe90000`
@@ -158,6 +174,7 @@
 | 集成仓库 | `/home/dorcus_t/la32r-upstream-integration` |
 | vmlinux | `/home/dorcus_t/la32r-upstream-integration/build/linux-loongson-soc/vmlinux` |
 | fb_bench | `integration/tools/fb_bench.c` |
+| Blitter 驱动计划 | `doc/PLAN_BLITTER_LINUX_DRIVER.md` |
 
 ---
 
@@ -200,28 +217,31 @@ md.l 0x9fea0020 1            # STATUS
 
 ## 6. 已知问题 / 待排查
 
-1. **烧录 10:30 bitstream 并上板验证**：确认 U-Boot 串口、FILL/COPY、cached/burst 配置、中断。
-2. **fb_bench 性能**：此前 2.5 FPS 是 640×480 逐像素软件生成导致；现分 game/display/640 三模式，需上板分别测量。
-3. **60MHz 稳定性**：时序通过（WNS=0.978）但未做长时间稳定性测试。
-4. **Phase 5 待上板**：矩阵/PS/2 驱动代码构建完成，但依赖重建后的 bitstream。
-5. **Blitter 软件适配代码完成，待上板验证**：DTS 节点、内核驱动/ioctl、fb 加速钩子、`fb_bench blit` 均已实现；`IP/BLITTER/README.md` 为权威参考。
+1. **显示撕裂**：已实现硬件 pending swap + 驱动等待 `STATUS[0]`；**待含 pending swap 的 bitstream 生成后上板验证**。
+2. **含 pending swap 的 bitstream 未生成成功**：`run_pending_swap_build.log` 中 `synth_1` 报 `ERROR: synthesis failed`，需先定位 synthesis 失败原因。
+3. **fb_bench 性能**：`fill` 吞吐约为 `copy` 的 2 倍；红蓝整屏切换可达约 30fps；`blit` 为每帧交替棋盘格（48 次小 FILL + flip）。
+4. **60MHz 稳定性**：此前 route 后 WNS=0.978 但未做长时间稳定性测试；pending swap 版本尚未跑完时序。
+5. **PS/2 键盘待新 bitstream 验证**：已加 PULLUP（`soc_up.xdc`）+ PS/2 初始化只发一轮（`confreg_syn.v`），需重新生成 bitstream 后验证。
+6. **Blitter 驱动**：✅ 已验证（FILL/COPY 与 fb 加速钩子）；显示撕裂收尾后再接 Snake。
 
 ---
 
 ## 7. 下一步（按优先级）
 
-1. **烧录 10:30 bitstream**：`system_run.runs/impl_1/soc_top.bit`，然后上板验证。
+1. **重新生成含 pending swap + CDC 同步的 bitstream**：先查 `tmp/run_pending_swap_build.log` 中 synthesis 失败原因并修复；同时包含 PS/2 修复（PULLUP + TX 初始化）。
 2. **上板验证**：
    - `/dev/fb0`、控制台/logo、`cat /dev/urandom > /dev/fb0` 出噪点；
+   - `fb_bench blit`：确认交替棋盘格无撕裂、无错位伪影；
+   - `fb_bench fill` / `fb_bench copy`：对比单次大操作吞吐；
    - 矩阵键盘 `/dev/input/event0`；PS/2 到手后验证；
-   - Blitter FILL/COPY（用 `tmp/blitter_uboot_cmds.txt` 新布局命令）。
-3. **Phase 6 DOOM 移植**：选 `doomgeneric`，视频后端输出 `/dev/fb0`（640×480 RGB565），输入后端读 `/dev/input/event0`，交叉编译 `loongarch32-linux-gnusf-gcc`，放入 Buildroot rootfs overlay。
-4. **Phase 4B 2D Blitter 软件适配**（代码已完成，待上板验证；参考 `IP/BLITTER/README.md` 与 `doc/PLAN_BLITTER_LINUX_DRIVER.md`）：
-   - DTS 增加 `blitter@1fea0000`；
-   - 内核驱动：fb 层 `fb_fillrect`/`fb_copyarea` 走 blitter，或提供 `/dev/blitter` + ioctl；
-   - 用户态：`fb_bench blit` / `blit_test`，DOOM 后端使用矩形填充/拷贝加速；
+   - PS/2 键盘：U-Boot `md.l 0x9fd0f044 1` 看 FIFO 计数，Linux `evtest /dev/input/eventX` 验证按键。
+3. **Phase 6 Snake 2D 游戏**：新增 `integration/tools/snake.c`，直接 mmap `/dev/fb0`（RGB565），逻辑网格建议 40×30 或 32×24，读 `/dev/input/event0` 方向键/WASD；可选接入 Blitter FILL/COPY 加速。
+4. **Phase 4B 2D Blitter 软件适配**（✅ 已验证；参考 `IP/BLITTER/README.md` 与 `doc/PLAN_BLITTER_LINUX_DRIVER.md`）：
+   - DTS 含 `blitter@1fea0000`；
+   - 内核驱动：`loongson_soc_blitter.c`（`/dev/blitter` + 导出 API），VGA fb `fb_fillrect`/`fb_copyarea` 已接入；
+   - 用户态：`fb_bench blit/fill/copy`，Snake/2D 游戏后端使用矩形填充/拷贝加速；
    - 注意 CPU DCache 与 blitter 的 flush/invalidate 配合。
-5. **Phase 7 集成回归**：VGA 控制台、键盘、网卡、DOOM 可玩、blitter 加速正确。
+5. **Phase 7 集成回归**：VGA 控制台、键盘、网卡、Snake 可玩、blitter 加速正确。
 
 ---
 
